@@ -2,11 +2,12 @@ name: pages
 
 # Tests, then publishes the page (index.html, application modules and fonts;
 # not the tests) to GitHub Pages, which serves it over https as Web Serial needs.
+# Staging site: deploy pushes to staging after the checks pass.
 # One-time setup: Settings > Pages > Build and deployment > Source: GitHub Actions.
 
 on:
   push:
-    branches: [main]
+    branches: [staging]
   pull_request:
   workflow_dispatch:
 
@@ -26,7 +27,7 @@ jobs:
         run: node test/browser-check.mjs
 
   deploy:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/staging'
     needs: test
     runs-on: ubuntu-24.04
     permissions:
