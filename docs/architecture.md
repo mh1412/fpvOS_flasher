@@ -158,8 +158,11 @@ connection validation and selects the fpvOS execution profile for its stage arra
 `FPVOS_PREPARE` runs `AR9311_BOOTSTRAP` internally when that fixed plan requests it;
 there is no alternate workflow language or independent unlock configuration.
 
-`assets/ar9311-updater/v2/` contains the embedded-tools updater and matching tiny
-launcher, with source provenance and file hashes. `stages/ar9311-bootstrap.js`
+`assets/ar9311-updater/2026.10.31-ascent-vrx.1/` contains the released embedded-tools
+updater and matching tiny launcher, with public source provenance and file hashes.
+The manifest retains the v2 schema; this exact release build has not been flashed
+on hardware. Historical `v1/` and `v2/` assets are excluded from the staging site.
+`stages/ar9311-bootstrap.js`
 pins the manifest SHA-256 and checks all assets before any upload. A dedicated
 bounded binary-staging primitive permits this ELF up to 2 MiB; ordinary text
 staging retains its 64 KiB limit. Neither staging path sends FileEnd. After the

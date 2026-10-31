@@ -1,0 +1,24 @@
+{
+  "format": 1,
+  "version": "v2",
+  "board": "ar9311",
+  "board_id": 485,
+  "release": "2026.10.31-ascent-vrx.1",
+  "source": "https://github.com/mh1412/fpvOS",
+  "source_commit": "8cb13d6eed4e5b913625f79f675dfd957825cb18",
+  "supported_stock_firmware": [
+    "17.5.3",
+    "17.5.8",
+    "18.21.10"
+  ],
+  "files": {
+    "fpvos-update-ar9311": {
+      "size": 1418832,
+      "sha256": "1e849189ed0a583b54b6d7113e797b1d9c534fea28721da4abf3f3dc87d419ee"
+    },
+    "bootstrap.sh": {
+      "size": 433,
+      "sha256": "0708e0f82156103abbed53739c290ed9c196754d5fa53de19dfd3bad68941c5e"
+    }
+  }
+}

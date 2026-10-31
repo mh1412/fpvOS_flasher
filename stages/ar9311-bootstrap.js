@@ -3,8 +3,8 @@ import { canUnlockVrx } from '../devices/ascent-vrx.js';
 import { sameFactoryIdentity } from '../devices/common.js';
 import { uploadBootstrapBinary, uploadUnfinalized, CMD, rebootPayload, withTimeout, LinkLostError, TimeoutError } from '../transports/ascent.js';
 
-export const BOOTSTRAP_BASE = new URL('../assets/ar9311-updater/v2/', import.meta.url);
-export const BOOTSTRAP_MANIFEST_SHA256 = 'b36526ef40808055d4823b1a181af9a9f712eaa9a992393cb666678e476d28f8';
+export const BOOTSTRAP_BASE = new URL('../assets/ar9311-updater/2026.10.31-ascent-vrx.1/', import.meta.url);
+export const BOOTSTRAP_MANIFEST_SHA256 = '036631de06a7e1d7d69b494519ad9fbb2fe85ff82d18d990501aa48d0ed2ba04';
 export const BOOTSTRAP_STOCK_VERSIONS = Object.freeze(['17.5.3', '17.5.8', '18.21.10']);
 export const BOOTSTRAP_USB = Object.freeze([{ usbVendorId: 0x1d6b, usbProductId: 0x0104 }]);
 const allowsUsb = (info) => BOOTSTRAP_USB.some((u) => u.usbVendorId === info?.usbVendorId && u.usbProductId === info?.usbProductId);

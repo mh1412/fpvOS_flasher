@@ -43,6 +43,14 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: Site
+        run: |
+          mkdir -p _site/transports _site/assets/ar9311-updater
+          cp index.html *.js _site/
+          cp -r devices stages fonts _site/
+          cp -r assets/ar9311-updater/2026.10.31-ascent-vrx.1 _site/assets/ar9311-updater/
+          cp assets/ar9311-updater/COPYING assets/ar9311-updater/README.md _site/assets/ar9311-updater/
+          cp transports/*.js _site/transports/
       - name: Verify bundled updater source is public
         run: |
           python3 - <<'PY'
@@ -50,7 +58,7 @@ jobs:
           from pathlib import Path
           from urllib.request import urlopen
 
-          for path in sorted(Path('assets/ar9311-updater').glob('*/manifest.json')):
+          for path in sorted(Path('_site/assets/ar9311-updater').glob('*/manifest.json')):
               manifest = json.loads(path.read_text())
               repository = manifest['source'].removeprefix('https://github.com/')
               commit = manifest['source_commit']
@@ -61,12 +69,6 @@ jobs:
               except Exception as error:
                   raise SystemExit(f'::error::{path}: publish the corresponding source commit {commit} at {manifest["source"]} before deploying updater binaries ({error}).')
           PY
-      - name: Site
-        run: |
-          mkdir -p _site/transports
-          cp index.html *.js _site/
-          cp -r devices stages fonts assets _site/
-          cp transports/*.js _site/transports/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
