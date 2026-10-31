@@ -157,7 +157,7 @@ export const vrxUpdateMatches = (current, before, phase) => matchesVrx(current) 
 
 export const ASCENT_VRX = defineDevice({
   meta: {
-    id: 'ascent-vrx', name: 'Ascent VRX (standard)', models: ['Ascent VRX'],
+    id: 'ascent-vrx', name: 'Ascent VRX · Stock', models: ['Ascent VRX · Stock'],
     usb: [{ usbVendorId: 0x1d75, usbProductId: 0x0101 }],
     identity: { matches: matchesVrx, normalMatches: sameFactoryIdentity, updateMatches: vrxUpdateMatches },
     image: aswImage({ prefix: 'Ascent_G_Gnd', board: 5, parse: parseVrx, capacity: true,

@@ -39,7 +39,7 @@ async function scenario(name, query, { reselect, file = img, source = img, profi
   const shown = await js("[...document.querySelectorAll('#file-meta dt')].find(e => e.textContent === 'MD5').nextElementSibling.textContent");
   const expectedMd5 = createHash('md5').update(fs.readFileSync(source)).digest('hex');
   if (shown !== expectedMd5) throw new Error(`${name}: page shows md5 ${shown}, image is ${expectedMd5}`);
-  if (!await js(`document.querySelector('#profile-hint').textContent.includes(${JSON.stringify(profile === 'ascent-vrx' ? 'Ascent VRX' : profile === 'fpvos-ar9311' ? 'fpvOS AR9311' : 'Ascent Lite')})`)) {
+  if (!await js(`document.querySelector('#profile-hint').textContent.includes(${JSON.stringify(profile === 'ascent-vrx' ? 'Ascent VRX · Stock' : profile === 'fpvos-ar9311' ? 'Ascent VRX · fpvOS' : 'Ascent Lite')})`)) {
     throw new Error(`${name}: wrong detected hardware profile`);
   }
   await until("!document.querySelector('#flash').disabled", 5000, 'flash enabled');
