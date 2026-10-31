@@ -61,7 +61,7 @@ export const matchesFpvosAr9311 = (info) => ['fpvOS updater', 'fpvOS AR9311 upda
 
 export const FPVOS_AR9311 = defineDevice({
   meta: {
-    id: 'fpvos-ar9311', name: 'fpvOS AR9311 (standard VRX)', models: ['fpvOS Gnd485'],
+    id: 'fpvos-ar9311', name: 'Ascent VRX · fpvOS', models: ['Ascent VRX · fpvOS'],
     usb: [{ usbVendorId: 0x1d6b, usbProductId: 0x0104 }],
     deviceVersion: () => null,
     identity: { matches: matchesFpvosAr9311, normalMatches: (a, b) => matchesFpvosAr9311(a) && matchesFpvosAr9311(b) },
