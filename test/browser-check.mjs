@@ -39,7 +39,7 @@ async function scenario(name, query, { reselect, file = img, source = img, profi
   const shown = await js("[...document.querySelectorAll('#file-meta dt')].find(e => e.textContent === 'MD5').nextElementSibling.textContent");
   const expectedMd5 = createHash('md5').update(fs.readFileSync(source)).digest('hex');
   if (shown !== expectedMd5) throw new Error(`${name}: page shows md5 ${shown}, image is ${expectedMd5}`);
-  if (!await js(`document.querySelector('#profile-hint').textContent.includes(${JSON.stringify(profile === 'ascent-vrx' ? 'Ascent VRX · Stock' : profile === 'fpvos-ar9311' ? 'Ascent VRX · fpvOS' : 'Ascent Lite')})`)) {
+  if (!await js(`document.querySelector('#profile-hint').textContent.includes(${JSON.stringify(profile === 'ascent-vrx' ? 'Ascent VRX · Stock' : profile === 'fpvos-ar9311' ? 'Ascent VRX · fpvOS' : profile === 'fpvos-p1-air' ? 'BETAFPV P1 Air · fpvOS' : 'Ascent Lite')})`)) {
     throw new Error(`${name}: wrong detected hardware profile`);
   }
   await until("!document.querySelector('#flash').disabled", 5000, 'flash enabled');
@@ -86,7 +86,7 @@ async function scenario(name, query, { reselect, file = img, source = img, profi
   if (r.mode !== 'normal') fail.push(`unit ends in ${r.mode} mode`);
   if (reselect && r.requested < (bootstrap ? 1 : 2)) fail.push(`missing port reselection (${r.requested})`);
   if (!reselect && r.requested) fail.push('asked for the port without need');
-  const expectedName = path.basename(source);
+  const expectedName = profile === 'fpvos-p1-air' ? 'fpvos.fwu' : path.basename(source);
   if (r.remotePath !== `/tmp/pc/${expectedName}`) fail.push(`wrong remote filename: ${r.remotePath}`);
   if (unlock && (r.starts.length !== 3 || r.reboots[0] !== 'normal' || r.cmds.filter(c => /FILE_END/.test(c)).length !== 1)) fail.push('unlock staging/reboot/update trigger order was wrong');
   if (bootstrap && (r.starts.length !== 4 || r.starts[0] !== '/usrdata/fpvos-update' || r.starts[1] !== '/usrdata/fpvos-bootstrap.sh'
@@ -230,6 +230,15 @@ fwuParts.forEach((p,i) => { const at=96+104*i; fwuHeader.write(['kernel.img','as
   fwuHeader.writeUInt32LE(p.length,at+32); fwuHeader.write(createHash('sha256').update(p).digest('hex'),at+36); });
 fwuHeader.writeUInt32LE(crc32(fwuHeader),508); fs.writeFileSync(fwu,Buffer.concat([fwuHeader,...fwuParts]));
 
+const p1Fwu = path.join(out, 'fpvos-p1-air.fwu');
+const p1Header = Buffer.from(fwuHeader);
+p1Header.writeUInt32LE(1345409867, 12);
+['kernel.img', 'betafpv-p1-air.dtb', 'rootfs.cpio.gz'].forEach((name, i) => {
+  const at = 96 + 104 * i; p1Header.fill(0, at, at + 32); p1Header.write(name, at);
+});
+p1Header.fill(0, 508); p1Header.writeUInt32LE(crc32(p1Header), 508);
+fs.writeFileSync(p1Fwu, Buffer.concat([p1Header, ...fwuParts]));
+
 const harness = await openBrowser({ root, out });
 const { cdp, evaluate: js, until, screenshot: shot, chooseFile, problems } = harness;
 const base = `${harness.origin}/`;
@@ -252,6 +261,10 @@ try {
   failures.push(...await scenario('lost', '?regrant=0', { reselect: true }));
   failures.push(...await scenario('stock-to-fpvos', '?device=vrx&fw=18_21_10', { reselect: true, file:fwu, source:fwu, profile:'ascent-vrx', bootstrap:true }));
   failures.push(...await scenario('fpvos-update', '?device=fpvos', { reselect:false, file:fwu, source:fwu, profile:'fpvos-ar9311' }));
+  failures.push(...await scenario('p1-update', '?device=p1&startupDelay=8000', { reselect:false, file:p1Fwu, source:p1Fwu, profile:'fpvos-p1-air' }));
+  failures.push(...await scenario('p1-reselect', '?device=p1&regrant=0', { reselect:true, file:p1Fwu, source:p1Fwu, profile:'fpvos-p1-air' }));
+  failures.push(...await rejectedProfile('p1-rejects-vrx', '?device=p1', fwu));
+  failures.push(...await rejectedProfile('fpvos-vrx-rejects-p1', '?device=fpvos', p1Fwu));
   failures.push(...await rejectedProfile('vrx-rejects-air', '?device=vrx', img));
   failures.push(...await rejectedProfile('pro-cannot-be-forced', '?device=pro', img, 'ascent-vrx'));
   failures.push(...await rejectedProfile('vrx-rejects-untrusted-signature', '?device=vrx', syntheticVrx));

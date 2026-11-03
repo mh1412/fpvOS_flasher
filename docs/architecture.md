@@ -136,6 +136,25 @@ acknowledge a serial reboot without restarting, so manual recovery can be needed
 
 ## AR9311 fpvOS recovery service
 
+`devices/fpvos-bundle.js` validates the shared `FPVOSUP1` envelope using each
+board's manifest policy. `devices/fpvos-p1-air.js` uses board ID 1345409867,
+hardware `P1_SKY`, serial `fpvos-p1-air`, and the ordered components `kernel.img`,
+`betafpv-p1-air.dtb`, `rootfs.cpio.gz`. Only full kind-0 installs are accepted.
+Its limits follow the P1 firmware backend; VRX kind-1 restoration is excluded.
+The existing fpvOS stage sequence handles clean recovery, install status and
+postboot SHA verification for both boards.
+
+USB `1d6b:0104` selects the shared strict fpvOS transport, not a hardware profile.
+Its initial connection window is 30 seconds because the USB gadget can
+enumerate before the updater is ready during cold boot.
+`profileForDevice` combines USB membership with the complete updater identity.
+Reconnection prefers the original browser port and requires selection when
+several alternative ports match. The fpvOS stages supply an `acceptDevice`
+probe so another board is rejected before any mutating command is sent.
+The Linux adapter also keeps the original physical USB path across reboots.
+Filename matching is only an archive filter; ambiguous `.fwu` filenames have
+no board profile until their header is read.
+
 `devices/fpvos-ar9311.js` validates the full `FPVOSUP1` bundle manifest,
 component policy, lengths, header CRC and component SHA-256 hashes. Kind 0
 contains kernel/DTB/root; kind 1 contains full original kernel/DTB partitions.

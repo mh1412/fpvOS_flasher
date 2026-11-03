@@ -68,11 +68,11 @@ async function openPort(port) {
   state.connecting = true;
   const usbProfile = profileForUsb(port.getInfo());
   const link = new WebSerialLink(port, {
-    acceptPort: (info) => profileForUsb(info) === usbProfile
-      || usbProfile.meta.id === 'fpvos-ar9311' && profileForUsb(info)?.meta.id === 'ascent-vrx',
+    // fpvOS boards share USB IDs and the same strict transport. Resolve the
+    // board from FIND_DEVICE; each stage supplies its reconnect policy.
+    acceptPort: (info) => profileForUsb(info) === usbProfile,
     serial: usbProfile.transport.serial,
-    filters: usbProfile.meta.id === 'fpvos-ar9311'
-      ? [...usbProfile.meta.usb, ...getProfile('ascent-vrx').meta.usb] : usbProfile.meta.usb,
+    filters: usbProfile.meta.usb,
     log,
     onNeedPort: askForPort,
     onPortBack: () => { $('reselect').hidden = true; portRequest = null; },
@@ -92,7 +92,7 @@ async function openPort(port) {
   state.session = usbProfile.transport.protocol.createSession(link, log, usbProfile.transport);
   watchLink(link);
   try {
-    state.info = await state.session.deviceInfo();
+    state.info = await state.session.deviceInfo({ timeoutMs: usbProfile.transport.timeouts.connect ?? 6000 });
     state.profile = profileForDevice(state.info, port.getInfo());
     state.unlockOverride = null;
     log(`connected: ${state.info.firmware || state.info.name} (hw ${state.info.hardware}, sn ${state.info.serial})`);

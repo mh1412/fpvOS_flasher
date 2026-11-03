@@ -22,6 +22,7 @@ anything is sent, and the device does the flashing itself.
 | Ascent Lite+ air unit | `Ascent_H_Sky_*.img`, stock or fpvOS | same image and updater as Lite; **not yet on hardware** |
 | Ascent VRX (standard, Proxima-9311) | `Ascent_G_Gnd_*.img`, signed stock ASW/OTRA | hardware-tested upgrades through 18.21.10 and unlocked downgrade to 17.5.8 |
 | fpvOS AR9311 on standard VRX | full `.fwu` install or original kernel/DTB restoration bundle | recovery-service path; simulated tests only |
+| BETAFPV P1 Air running fpvOS | full `fpvos-p1-air.fwu` from `p1-air-source` | fpvOS updater / clean recovery; stock installation is separate |
 
 **VRX Pro, Avatar, L_Gnd and goggles are not supported profiles.** The standard
 VRX uses board **5 / G_Gnd**.
@@ -51,6 +52,28 @@ This is not installation of an arbitrary vendor release. Vendor `.img`
 installation through our updater is **not implemented yet**; the existing
 signed-stock path is unchanged. The stock-kernel/root-only
 `ar9311-vendor` build is not supported.
+
+### BETAFPV P1 Air
+
+Select `fpvos-p1-air.fwu` from the fpvOS `p1-air-source` build. The P1 must
+already run its fpvOS updater, in normal mode or clean recovery. The page
+enters clean recovery, validates and transfers the full kernel/DTB/rootfs bundle,
+waits for device-side installation and readback, then reboots and checks the
+running package SHA-256. Keep external power connected throughout.
+
+P1 and fpvOS VRX use the same USB IDs. The page identifies the board from the
+updater response and bundle header; selecting a profile or renaming a file
+cannot permit cross-flashing. Reconnection checks the updater identity before
+continuing. If several matching ports are available, select the same physical
+unit when prompted.
+
+This profile supports unsigned development bundles for the P1_SKY 1.0.44 NAND
+layout. The firmware updater preserves stock bank 1, factory calibration and
+user settings. Stock P1 images, VRX restoration bundles, initial stock-to-fpvOS
+installation and switching back to stock are not browser operations. Use the
+[P1 firmware installation and recovery instructions](https://github.com/mh1412/fpvOS/blob/p1-air-support/br-external/board/p1-air/README.md#persistent-installation-and-usb-recovery)
+for the separate initial installer and stock recovery command. Keep verified
+device backups and recovery access.
 
 ## Use
 

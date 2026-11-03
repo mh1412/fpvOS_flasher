@@ -335,6 +335,10 @@
         OTRA container, SHA-256 and the standard VRX RSA key. The receiver applies its own
         authentication and hardware checks, then writes both single and paired NAND partitions.
         Persistent application changes may be replaced. VRX Pro and Avatar images need different profiles.</p>
+      <p><b>BETAFPV P1 Air · fpvOS:</b> select a full P1 <code>.fwu</code> bundle.
+        The unit enters clean recovery, installs and verifies the image, then reboots.
+        Keep external power connected. Initial installation from stock requires the separate
+        P1 installer; stock images and VRX bundles are not supported by this profile.</p>
       <p>Close the vendor's PC tool and any serial terminal first: only one program can use the port.</p>
       <p>On Linux your user needs access to <code>/dev/ttyACM*</code> (the <code>dialout</code> group),
         and ModemManager, if it runs, can grab a new serial port for a few seconds.</p>

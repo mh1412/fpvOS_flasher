@@ -9,7 +9,7 @@ import { supportsAr9311Bootstrap } from './stages/ar9311-bootstrap.js';
 export async function prepareFirmware(file, { profile = null, onProgress = () => {} } = {}) {
   const opened = await openFirmware(file, {
     wanted: (name) => profile ? profile.meta.image.pattern.test(name)
-      || profile.meta.id === 'ascent-vrx' && getProfile('fpvos-ar9311').meta.image.pattern.test(name) : !!profileForFileName(name),
+      || profile.meta.id === 'ascent-vrx' && getProfile('fpvos-ar9311').meta.image.pattern.test(name) : PROFILES.some((p) => p.meta.image.pattern.test(name)),
     family: (name) => profileForFileName(name)?.meta.id, onProgress,
   });
   const imageProfile = profileForImage(opened.bytes);

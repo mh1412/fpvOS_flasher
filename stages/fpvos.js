@@ -11,11 +11,16 @@ async function control(ctx, cmd, payload) {
   return new TextDecoder().decode(f.payload.subarray(4)).replace(/\0.*$/s, '');
 }
 
-async function reconnect(ctx, usb = ctx.profile.meta.usb) {
+async function reconnect(ctx, usb = ctx.profile.meta.usb, matches = ctx.profile.meta.identity.matches) {
   const { session, profile } = ctx;
   await withTimeout(session.link.closed, profile.transport.timeouts.reboot, 'fpvOS did not disconnect for reboot.');
   session.reset();
   await session.link.reopen({ timeoutMs: profile.transport.timeouts.normalBoot, filters: usb,
+    acceptDevice: async () => {
+      session.reset();
+      session.attach(session.link);
+      return matches(await session.deviceInfo({ timeoutMs: 3000 }));
+    },
     acceptPort: (info) => usb.some((u) => u.usbVendorId === info.usbVendorId && u.usbProductId === info.usbProductId) });
   session.attach(session.link);
   return session.deviceInfo({ timeoutMs: 15000 });
@@ -26,7 +31,7 @@ export async function FPVOS_PREPARE(ctx) {
   ctx.step('clean', 0.02, 'Preparing fpvOS RAM recovery');
   const detail = await control(ctx, CMD.REBOOT, rebootPayload('clean'));
   const info = detail.startsWith('rebooting into ') ? await reconnect(ctx) : await ctx.session.deviceInfo();
-  if (!ctx.profile.meta.identity.matches(info) || info.detail !== 'clean RAM mode') throw new Error('fpvOS AR9311 clean recovery identity was not verified.');
+  if (!ctx.profile.meta.identity.matches(info) || info.detail !== 'clean RAM mode') throw new Error('fpvOS clean recovery identity was not verified.');
   ctx.runtime.updateInfo = info;
   ctx.runtime.updateVerified = true;
   if (!Number.isInteger(info.maxChunk) || info.maxChunk < 1) throw new Error('Invalid recovery transfer chunk limit.');
@@ -76,7 +81,8 @@ export async function FPVOS_INSTALL(ctx) {
 export async function FPVOS_REBOOT_VERIFY(ctx) {
   ctx.step('restart', 0.98, 'Rebooting and verifying installed firmware');
   await control(ctx, CMD.REBOOT, rebootPayload('reboot'));
-  const after = await reconnect(ctx, ctx.image.parsed.kind === 1 ? [{ usbVendorId: 0x1d75, usbProductId: 0x0101 }] : ctx.profile.meta.usb);
+  const after = await reconnect(ctx, ctx.image.parsed.kind === 1 ? [{ usbVendorId: 0x1d75, usbProductId: 0x0101 }] : ctx.profile.meta.usb,
+    ctx.image.parsed.kind === 1 ? (info) => info.name === 'Ascent_VRX' : ctx.profile.meta.identity.matches);
   if (ctx.image.parsed.kind === 1) {
     // Restoration keeps the stock root and data. No package hash is reported by stock.
     if (after.name !== 'Ascent_VRX' || !/^Ascent_G_Gnd_\d+_\d+_\d+$/.test(after.firmware)
