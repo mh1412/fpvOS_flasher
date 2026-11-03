@@ -54,6 +54,7 @@ jobs:
           cp -r devices stages fonts _site/
           cp -r assets/ar9311-updater/2026.10.31-ascent-vrx.1 _site/assets/ar9311-updater/
           cp assets/ar9311-updater/COPYING assets/ar9311-updater/README.md _site/assets/ar9311-updater/
+          cp -r assets/p1-updater _site/assets/
           cp transports/*.js _site/transports/
       - name: Verify bundled updater source is public
         run: |
@@ -62,7 +63,7 @@ jobs:
           from pathlib import Path
           from urllib.request import urlopen
 
-          for path in sorted(Path('_site/assets/ar9311-updater').glob('*/manifest.json')):
+          for path in sorted(Path('_site/assets').glob('*-updater/*/manifest.json')):
               manifest = json.loads(path.read_text())
               repository = manifest['source'].removeprefix('https://github.com/')
               commit = manifest['source_commit']
