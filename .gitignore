@@ -3,3 +3,6 @@
 
 # Generated GitHub Pages site
 _site/
+
+# Python helper caches
+__pycache__/

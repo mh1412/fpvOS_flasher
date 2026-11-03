@@ -22,6 +22,10 @@ jobs:
         with:
           node-version: 22
       - run: node --test test/test.mjs test/archive.test.mjs test/profiles.test.mjs test/unlock.test.mjs test/fpvos.test.mjs test/bootstrap.test.mjs
+      - name: P1 preparation helper and download
+        run: |
+          python3 -m unittest discover -s test -p '*_test.py'
+          python3 tools/package-p1-bootstrap.py --check
       - name: Browser integration (simulated devices)
         run: node test/browser-check.mjs
 

@@ -22,7 +22,7 @@ anything is sent, and the device does the flashing itself.
 | Ascent Lite+ air unit | `Ascent_H_Sky_*.img`, stock or fpvOS | same image and updater as Lite; **not yet on hardware** |
 | Ascent VRX (standard, Proxima-9311) | `Ascent_G_Gnd_*.img`, signed stock ASW/OTRA | hardware-tested upgrades through 18.21.10 and unlocked downgrade to 17.5.8 |
 | fpvOS AR9311 on standard VRX | full `.fwu` install or original kernel/DTB restoration bundle | recovery-service path; simulated tests only |
-| BETAFPV P1 Air running fpvOS | full `fpvos-p1-air.fwu` from `p1-air-source` | fpvOS updater / clean recovery; stock installation is separate |
+| BETAFPV P1 Air | full `fpvos-p1-air.fwu` from `p1-air-source` | stock 1.0.44 via the bundled Linux preparation helper; browser installs and updates through fpvOS recovery |
 
 **VRX Pro, Avatar, L_Gnd and goggles are not supported profiles.** The standard
 VRX uses board **5 / G_Gnd**.
@@ -55,8 +55,20 @@ signed-stock path is unchanged. The stock-kernel/root-only
 
 ### BETAFPV P1 Air
 
-Select `fpvos-p1-air.fwu` from the fpvOS `p1-air-source` build. The P1 must
-already run its fpvOS updater, in normal mode or clean recovery. The page
+For **stock P1_SKY v1.0 / firmware 1.0.44.rel**, download the
+[P1 preparation kit](assets/p1-updater/p1-stock-preparation-v1.zip), also linked
+in the page's Device panel. Extract it on Linux with Python 3 and OpenSSH.
+Set the P1 USB network interface to `192.168.3.200/24`, without a gateway,
+then run `python3 prepare-p1.py --check` and `python3 prepare-p1.py --execute`.
+SSH prompts for stock credentials and verifies the host key. The helper pins
+the connection to the selected USB interface, checks the stock identity,
+uploads the bundled installer and launcher, verifies their hashes, and arms
+the one-time clean boot. Existing preparation files/flags are never overwritten.
+See the [included guide](assets/p1-updater/README.txt) for prerequisites and recovery.
+
+Once the unit appears as **P1 Air recovery**, connect to its fpvOS serial port
+in the browser and select `fpvos-p1-air.fwu` from the fpvOS `p1-air-source` build.
+An already-installed fpvOS unit can connect directly without the helper. The page
 enters clean recovery, validates and transfers the full kernel/DTB/rootfs bundle,
 waits for device-side installation and readback, then reboots and checks the
 running package SHA-256. Keep external power connected throughout.
@@ -69,10 +81,11 @@ unit when prompted.
 
 This profile supports unsigned development bundles for the P1_SKY 1.0.44 NAND
 layout. The firmware updater preserves stock bank 1, factory calibration and
-user settings. Stock P1 images, VRX restoration bundles, initial stock-to-fpvOS
-installation and switching back to stock are not browser operations. Use the
+user settings. Stock P1 images and VRX restoration bundles are not accepted.
+Initial preparation currently requires the Linux helper; subsequent browser
+updates also work on Windows and macOS. Use the
 [P1 firmware installation and recovery instructions](https://github.com/mh1412/fpvOS/blob/p1-air-support/br-external/board/p1-air/README.md#persistent-installation-and-usb-recovery)
-for the separate initial installer and stock recovery command. Keep verified
+for the stock recovery command and firmware details. Keep verified
 device backups and recovery access.
 
 ## Use
@@ -173,6 +186,8 @@ Use Node 22+, Python 3, `xz`, `tar`, and Chrome/Chromium for the full test suite
 
 ```sh
 node --test test/test.mjs test/archive.test.mjs test/profiles.test.mjs test/unlock.test.mjs test/fpvos.test.mjs test/bootstrap.test.mjs
+python3 -m unittest discover -s test -p '*_test.py'
+python3 tools/package-p1-bootstrap.py --check
 node test/browser-check.mjs
 ```
 
