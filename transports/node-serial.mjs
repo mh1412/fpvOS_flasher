@@ -5,16 +5,17 @@ import tty from 'node:tty';
 import { execFileSync } from 'node:child_process';
 import { sleep } from './ascent.js';
 
-export function findSerialDevice(filters) {
+export function findSerialDevice(filters, usbPath) {
   for (const n of fs.readdirSync('/sys/class/tty').filter((x) => x.startsWith('ttyACM'))) {
     try {
       const usbDev = path.dirname(fs.realpathSync(`/sys/class/tty/${n}/device`));
+      if (usbPath && usbDev !== usbPath) continue;
       const usbInfo = {
         usbVendorId: parseInt(fs.readFileSync(`${usbDev}/idVendor`, 'utf8').trim(), 16),
         usbProductId: parseInt(fs.readFileSync(`${usbDev}/idProduct`, 'utf8').trim(), 16),
       };
       if (filters.some((u) => u.usbVendorId === usbInfo.usbVendorId && u.usbProductId === usbInfo.usbProductId)) {
-        return { dev: `/dev/${n}`, usbInfo };
+        return { dev: `/dev/${n}`, usbInfo, usbPath: usbDev };
       }
     } catch { /* not USB */ }
   }
@@ -69,18 +70,20 @@ export class NodeSerialLink {
     await this.closed;
   }
 
-  async reopen({ timeoutMs = 90000, signal, filters } = {}) {
+  async reopen({ timeoutMs = 90000, signal, filters, acceptDevice } = {}) {
     await this.close();
     if (filters) this.filters = filters;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (signal?.aborted) throw new Error('Cancelled.');
       try {
-        const device = findSerialDevice(this.filters);
+        const device = findSerialDevice(this.filters, this.device.usbPath);
         if (!device) throw new Error('waiting for the original USB profile');
         this.device = device;
-        return await this.open();
-      } catch { await sleep(500); }
+        await this.open();
+        if (acceptDevice && !await acceptDevice()) throw new Error('wrong updater identity');
+        return;
+      } catch { await this.close(); await sleep(500); }
     }
     throw new Error('the unit did not come back');
   }

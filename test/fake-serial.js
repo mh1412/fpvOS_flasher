@@ -8,11 +8,12 @@
 
 (() => {
   const params = new URLSearchParams(location.search);
+  const readyAt = Date.now() + Number(params.get('startupDelay') ?? 0);
   const type = params.get('device') ?? 'air';
   const rejectData = params.has('rejectData');
   const installFailure = params.has('installFailure');
   const VID = type === 'air' ? 0x1d76 : 0x1d75;
-  let custom = type === 'fpvos';
+  let custom = type === 'fpvos' || type === 'p1';
   const name = type === 'air' ? 'Ascent_H_Sky' : type === 'vrx' ? 'Ascent_VRX' : 'Ascent_VRX_Pro';
   const factory = { name, serial: 'FAKE0001', hardware: type === 'air' ? 'FPV-Ascent-Sky-482-V1.3-1.0'
     : type === 'vrx' ? 'FPV-Ascent-Gnd-485-V1.2-1.0' : 'HW_V1.0' };
@@ -94,10 +95,11 @@
     handle(f) {
       const C = A.CMD;
       if (f.cmd === C.FIND_DEVICE) {
+        if (Date.now() < readyAt) return;
         if (this.custom) return this.send(f, this.struct(300, (i32, str) => {
           i32(0, 1 << 20); str(4, 'development'); str(36, 'fpvOS updater');
           str(104, /^[a-f0-9]{64}$/.test(firmware) ? firmware : 'fpvOS unsigned development updates');
-          str(168, 'fpvos-ar9311'); str(200, 'Gnd485'); str(236, this.mode === 'clean' ? 'clean RAM mode' : 'normal mode');
+          str(168, type === 'p1' ? 'fpvos-p1-air' : 'fpvos-ar9311'); str(200, type === 'p1' ? 'P1_SKY' : 'Gnd485'); str(236, this.mode === 'clean' ? 'clean RAM mode' : 'normal mode');
         }));
         const current = this.mode === 'unlocked' && !params.has('unlockFails') ? 'Ascent_G_Gnd_0_0_0' : firmware;
         const airClean = type === 'air' && this.mode === 'clean';
@@ -110,9 +112,9 @@
       }
       if (f.cmd === C.REBOOT) {
         const request = new TextDecoder().decode(f.payload).replace(/\0.*$/s, '');
-        this.send(f, this.custom ? this.struct(68, (i32, str) => { i32(0,0); str(4,'OK'); }) : undefined);
+        this.send(f, this.custom ? this.struct(68, (i32, str) => { i32(0,0); str(4, type === 'p1' && request === 'clean' ? 'rebooting into clean RAM mode' : 'OK'); }) : undefined);
         fake.rebootPayloads.push(request);
-        if (this.custom && request === 'clean') { this.mode = 'clean'; return; }
+        if (this.custom && request === 'clean') { if (type === 'p1') return reboot('clean'); this.mode = 'clean'; return; }
         let mode = request === 'clean' ? 'clean' : 'normal';
         if (request === 'normal' && staged.has('/factory/sirius-clean-system-flag')) {
           const flag = new TextDecoder().decode(staged.get('/factory/sirius-clean-system-flag'));

@@ -61,7 +61,8 @@ export class WebSerialLink {
     await this.closed;
   }
 
-  async reopen({ timeoutMs = 90000, signal, filters, acceptPort, requireSelection = false } = {}) {
+  async reopen({ timeoutMs = 90000, signal, filters, acceptPort, acceptDevice, requireSelection = false } = {}) {
+    const originalPort = this.port;
     await this.close();
     if (filters) this.filters = filters;
     if (acceptPort) this.acceptPort = acceptPort;
@@ -78,14 +79,23 @@ export class WebSerialLink {
       if (waited > (asked ? Math.max(timeoutMs, 5 * 60000) : timeoutMs)) throw new Error('The device did not come back.');
       const ports = requireSelection ? [] : (await navigator.serial.getPorts()).filter((p) => this.acceptPort(p.getInfo()));
       if (picked && !this.acceptPort(picked.getInfo())) { picked = null; asked = false; continue; }
-      for (const p of picked ? [picked, ...ports] : ports) {
+      // Prefer the exact authorized port. If it is unavailable and several
+      // devices share USB IDs, require the chooser rather than guessing a unit.
+      const candidates = picked ? [picked] : ports.includes(originalPort)
+        ? [originalPort] : ports.length <= 1 ? ports : [];
+      for (const p of candidates) {
         if (!this.acceptPort(p.getInfo())) continue;
         try {
           this.port = p;
           await this.open();
+          if (acceptDevice && !await acceptDevice()) {
+            await this.close();
+            if (picked === p) { picked = null; asked = false; }
+            continue;
+          }
           if (asked) this.onPortBack?.();
           return;
-        } catch { /* not up yet, or the old dead port */ }
+        } catch { await this.close(); /* not up yet, or the old dead port */ }
       }
       await sleep(500);
     }

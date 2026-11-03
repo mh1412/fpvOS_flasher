@@ -6,19 +6,22 @@ import { prepareFirmware, evaluateSelection, flashFirmware } from '../flasher.js
 import { profileForDevice, getProfile } from '../devices/index.js';
 import { CMD, crc32, Session, encodeFrame, TimeoutError } from '../transports/ascent.js';
 import { storedZip } from './fixtures.mjs';
+import { FPVOS_P1_AIR, parseP1Bundle } from '../devices/fpvos-p1-air.js';
+import { WebSerialLink } from '../transports/web-serial.js';
 import { FPVOS_REBOOT_VERIFY } from '../stages/fpvos.js';
 
 const sha = (b) => createHash('sha256').update(b).digest('hex');
-function bundle(kind = 0) {
+function bundle(kind = 0, board = 485) {
   const payloads = kind === 0 ? [Buffer.from('kernel'), Buffer.from('dtb'), Buffer.from('root')]
     : [Buffer.alloc(0x600000), Buffer.alloc(0x60000)];
   const h = Buffer.alloc(512);
   h.write('FPVOSUP1');
-  [1, 485, 512 + payloads.reduce((n, p) => n + p.length, 0), payloads.length].forEach((n, i) => h.writeUInt32LE(n, 8 + i * 4));
+  [1, board, 512 + payloads.reduce((n, p) => n + p.length, 0), payloads.length].forEach((n, i) => h.writeUInt32LE(n, 8 + i * 4));
   h.write('development', 24); h.writeUInt32LE(kind, 88);
   payloads.forEach((p, i) => {
     const o = 96 + 104 * i;
-    h.write(['kernel.img', 'ascent-gnd485.dtb', 'rootfs.cpio.uboot'][i], o);
+    h.write((board === 485 ? ['kernel.img', 'ascent-gnd485.dtb', 'rootfs.cpio.uboot']
+      : ['kernel.img', 'betafpv-p1-air.dtb', 'rootfs.cpio.gz'])[i], o);
     h.writeUInt32LE(p.length, o + 32); h.write(sha(p), o + 36);
   });
   h.writeUInt32LE(crc32(h), 508);
@@ -27,6 +30,87 @@ function bundle(kind = 0) {
 function fixHeader(b) { b.fill(0, 508, 512); b.writeUInt32LE(crc32(b.subarray(0, 512)), 508); return b; }
 const info = { name: 'fpvOS updater', hardware: 'Gnd485', serial: 'fpvos-ar9311', status: 0, maxChunk: 1024,
   firmware: 'fpvOS unsigned development updates', detail: 'clean RAM mode' };
+const p1Info = { ...info, hardware: 'P1_SKY', serial: 'fpvos-p1-air' };
+
+test('P1 board contents select its profile regardless of filename, with shared USB IDs', async () => {
+  const image = await prepareFirmware(new File([bundle(0, 1345409867)], 'renamed-vrx.fwu'));
+  assert.equal(image.parsed.profileId, 'fpvos-p1-air');
+  assert.deepEqual(image.parsed.errors, []);
+  assert.equal(profileForDevice(p1Info, FPVOS_AR9311.meta.usb[0]), FPVOS_P1_AIR);
+  assert.equal(profileForDevice(info, FPVOS_P1_AIR.meta.usb[0]), FPVOS_AR9311);
+  assert.equal(evaluateSelection({ info: p1Info, profile: FPVOS_P1_AIR, image }).canFlash, true);
+  assert.equal(evaluateSelection({ info, profile: FPVOS_AR9311, image }).canFlash, false);
+  for (const change of [{ hardware: 'Gnd485' }, { serial: 'fpvos-ar9311' }, { name: 'P1_SKY' }, { status: -1 }]) {
+    assert.equal(profileForDevice({ ...p1Info, ...change }), null);
+  }
+  assert.ok((await parseFpvosBundle(image.bytes)).errors.length);
+  assert.ok((await parseP1Bundle(bundle())).errors.length);
+  const zipped = await prepareFirmware(new File([storedZip([['release/p1.fwu', image.bytes]])], 'p1.zip'));
+  assert.equal(zipped.parsed.profileId, 'fpvos-p1-air');
+  const mixed = new File([storedZip([['p1.fwu', image.bytes], ['vrx.fwu', bundle()]])], 'mixed.zip');
+  await assert.rejects(prepareFirmware(mixed, { profile: FPVOS_P1_AIR }), /multiple/);
+});
+
+test('P1 rejects restore/root-only bundles, VRX component names, corruption and P1 capacity overflow', async () => {
+  for (const edit of [
+    (b) => b.writeUInt32LE(1, 88), (b) => b.writeUInt32LE(2, 88),
+    (b) => b.writeUInt32LE(2, 20), (b) => b.write('ascent-gnd485.dtb', 200),
+    (b) => b.write('rootfs.cpio.uboot', 304), (b) => b.writeUInt32LE(65537, 232),
+    (b) => b.writeUInt32LE(8388609, 336), (b) => b.writeUInt32LE(6291457, 128),
+    (b) => b[512] ^= 1, (b) => b[92] = 1,
+  ]) {
+    const b = bundle(0, 1345409867); edit(b);
+    assert.ok((await parseP1Bundle(fixHeader(b))).errors.length);
+  }
+});
+
+test('P1 installs once and verifies postboot hash; a VRX recovery identity never receives a bundle', async () => {
+  const image = await prepareFirmware(new File([bundle(0, 1345409867)], 'p1.fwu'));
+  for (const opts of [{}, { lostEnd: true }, { wrongHash: true }, { cleanInfo: info }]) {
+    const session = fakeSession(image, { unitInfo: p1Info, ...opts });
+    const result = flashFirmware(session, FPVOS_P1_AIR, image, { info: p1Info });
+    if (opts.wrongHash || opts.cleanInfo) await assert.rejects(result, /SHA-256|identity/);
+    else assert.equal((await result).firmware, image.parsed.sha256);
+    assert.equal(session.calls.filter((c) => c === CMD.FILE_START).length, opts.cleanInfo ? 0 : 1);
+    assert.equal(session.calls.filter((c) => c === CMD.FILE_END).length, opts.cleanInfo ? 0 : 1);
+  }
+});
+
+test('shared USB reconnect rejects the other board before allowing further commands', async () => {
+  const original = globalThis.navigator;
+  const old = { getInfo: () => FPVOS_P1_AIR.meta.usb[0] };
+  const wrong = { getInfo: old.getInfo, identity: info };
+  const right = { getInfo: old.getInfo, identity: p1Info };
+  let ports = [wrong];
+  const opened = [];
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { serial: { getPorts: async () => ports } } });
+  try {
+    const link = new WebSerialLink(old);
+    link.open = async () => { opened.push(link.port); };
+    link.close = async () => { if (link.port === wrong) ports = [right]; };
+    await link.reopen({ timeoutMs: 3000, acceptDevice: async () => FPVOS_P1_AIR.meta.identity.matches(link.port.identity) });
+    assert.deepEqual(opened, [wrong, right]);
+    assert.equal(link.port, right);
+  } finally { Object.defineProperty(globalThis, 'navigator', { configurable: true, value: original }); }
+});
+
+test('shared USB reconnect prefers the original port and does not guess among other units', async () => {
+  const original = globalThis.navigator;
+  const first = {}, second = {}, stale = {};
+  for (const p of [first, second, stale]) p.getInfo = () => FPVOS_P1_AIR.meta.usb[0];
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { serial: { getPorts: async () => [first, second] } } });
+  try {
+    for (const current of [second, stale]) {
+      const link = new WebSerialLink(current);
+      const opened = [];
+      link.open = async () => { opened.push(link.port); };
+      link.close = async () => {};
+      const result = link.reopen({ timeoutMs: 10 });
+      if (current === stale) { await assert.rejects(result, /did not come back/); assert.deepEqual(opened, []); }
+      else { await result; assert.deepEqual(opened, [second]); }
+    }
+  } finally { Object.defineProperty(globalThis, 'navigator', { configurable: true, value: original }); }
+});
 
 test('AR9311 bundles validate lengths, ordered components, CRC and SHA without signatures or version ordering', async () => {
   for (const kind of [0, 1]) {
@@ -59,10 +143,11 @@ test('fpvOS service identity excludes stock-kernel backend and incomplete stock 
 });
 
 function fakeSession(image, opts = {}) {
+  const unitInfo = opts.unitInfo ?? info;
   const calls = []; let installed = false, received = 0;
   const session = { calls, reset() {}, attach() {}, deviceInfo: async () => installed
-    ? opts.after ?? { ...info, firmware: opts.wrongHash ? '0'.repeat(64) : image.parsed.sha256 }
-    : { ...info, maxChunk: 128, ...opts.cleanInfo },
+    ? opts.after ?? { ...unitInfo, firmware: opts.wrongHash ? '0'.repeat(64) : image.parsed.sha256 }
+    : { ...unitInfo, maxChunk: 128, ...opts.cleanInfo },
     link: { closed: Promise.resolve(), close: async () => {}, reopen: async () => {} },
     async request(cmd, payload) {
       calls.push(cmd);
