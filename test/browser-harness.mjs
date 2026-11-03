@@ -10,6 +10,7 @@ export const PUBLIC_ASSETS = new Set(['index.html', 'app.js', 'flasher.js', 'fir
   'stages/ascent.js', 'stages/vrx-unlock.js', 'stages/fpvos.js', 'stages/ar9311-bootstrap.js', 'transports/ascent.js', 'transports/web-serial.js',
   'assets/ar9311-updater/2026.10.31-ascent-vrx.1/manifest.json', 'assets/ar9311-updater/2026.10.31-ascent-vrx.1/fpvos-update-ar9311',
   'assets/ar9311-updater/2026.10.31-ascent-vrx.1/bootstrap.sh', 'assets/ar9311-updater/COPYING',
+  'assets/p1-updater/p1-stock-preparation-v1.zip', 'assets/p1-updater/README.txt', 'assets/p1-updater/COPYING',
   'archive.js', 'xz.js', 'checksum.js', 'fonts/ChakraPetch-Medium.ttf', 'fonts/ChakraPetch-SemiBold.ttf']);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

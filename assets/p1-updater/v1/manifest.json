@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "version": "v1",
+  "board": "p1-air",
+  "board_id": 1345409867,
+  "source": "https://github.com/mh1412/fpvOS",
+  "source_commit": "e32ea69aac26fec989a8a7f48419356846702d41",
+  "build_config": "p1air_source_defconfig",
+  "supported_stock_firmware": [
+    "1.0.44.rel"
+  ],
+  "files": {
+    "fpvos-update-p1-air": {
+      "size": 1115632,
+      "sha256": "9f4fd8f099e427efdc58298f73d202f819189f1c72835757a84098656d5afb96"
+    },
+    "bootstrap.sh": {
+      "size": 402,
+      "sha256": "9c805fbbc0cede73a4954143131ced286e143c49ef2dccc662668cecde07e7dc"
+    }
+  }
+}

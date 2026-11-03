@@ -255,6 +255,17 @@
     </div>
     <div id="unit-status" data-kind="idle"><span>Not connected</span></div>
     <dl id="unit-info" hidden></dl>
+    <details id="p1-preparation">
+      <summary>Installing fpvOS on a stock BETAFPV P1?</summary>
+      <p>First run the one-time P1 preparation helper on Linux. It copies the bundled
+        installer over USB networking and restarts the unit into recovery.</p>
+      <p><a id="p1-preparation-download" href="assets/p1-updater/p1-stock-preparation-v1.zip" download>Download P1 preparation kit</a>
+        · Requires stock 1.0.44, Python 3 and OpenSSH.</p>
+      <p>Extract the kit and follow its README to set up USB networking. Keep external power
+        connected, then run <code>python3 prepare-p1.py --execute</code>.
+        When recovery appears, click Connect above, choose the fpvOS P1 port,
+        and select your <code>fpvos-p1-air.fwu</code> below.</p>
+    </details>
   </section>
 
   <section class="panel">
@@ -337,8 +348,9 @@
         Persistent application changes may be replaced. VRX Pro and Avatar images need different profiles.</p>
       <p><b>BETAFPV P1 Air · fpvOS:</b> select a full P1 <code>.fwu</code> bundle.
         The unit enters clean recovery, installs and verifies the image, then reboots.
-        Keep external power connected. Initial installation from stock requires the separate
-        P1 installer; stock images and VRX bundles are not supported by this profile.</p>
+        Keep external power connected. For initial installation from stock 1.0.44,
+        use the preparation kit in the Device panel first. Stock images and VRX bundles
+        are not supported by this profile.</p>
       <p>Close the vendor's PC tool and any serial terminal first: only one program can use the port.</p>
       <p>On Linux your user needs access to <code>/dev/ttyACM*</code> (the <code>dialout</code> group),
         and ModemManager, if it runs, can grab a new serial port for a few seconds.</p>

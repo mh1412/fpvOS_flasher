@@ -34,6 +34,10 @@ async function connectedPage(query = '') {
 async function scenario(name, query, { reselect, file = img, source = img, profile = 'ascent-air', unlock = false, bootstrap = false }) {
   console.log(`--- ${name}`);
   await connectedPage(query);
+  if (profile === 'fpvos-p1-air') {
+    const kit = await js("document.querySelector('#p1-preparation-download')?.getAttribute('href')");
+    if (kit !== 'assets/p1-updater/p1-stock-preparation-v1.zip' || !PUBLIC_ASSETS.has(kit)) throw new Error('P1 preparation download is not linked from the page.');
+  }
   await chooseFile(file);
   await until("!document.querySelector('#file-info').hidden && /[0-9a-f]{32}/.test(document.querySelector('#file-meta').innerText)", 30000, 'image parsed');
   const shown = await js("[...document.querySelectorAll('#file-meta dt')].find(e => e.textContent === 'MD5').nextElementSibling.textContent");
@@ -247,7 +251,9 @@ try {
   for (const name of PUBLIC_ASSETS) {
     const response = await fetch(`${base}${name}`);
     if (!response.ok) throw new Error(`Missing public asset: ${name}`);
-    await response.arrayBuffer();
+    const data = Buffer.from(await response.arrayBuffer());
+    if (name === 'assets/p1-updater/p1-stock-preparation-v1.zip'
+      && !data.equals(fs.readFileSync(path.join(root, name)))) throw new Error('P1 preparation download differs from the packaged kit.');
   }
   for (const name of ['test/fake-serial.js', 'test/browser-harness.mjs', 'transports/node-serial.mjs', '.git/config']) {
     if ((await fetch(`${base}${name}`)).status !== 404) throw new Error(`Private asset served: ${name}`);

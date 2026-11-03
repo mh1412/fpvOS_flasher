@@ -136,6 +136,23 @@ acknowledge a serial reboot without restarting, so manual recovery can be needed
 
 ## AR9311 fpvOS recovery service
 
+Stock P1 1.0.44 uses a nine-byte serial bootloader-entry protocol, not Ascent's
+OTRA file-transfer service. It is deliberately excluded from the Web Serial
+registry. The Device panel instead offers a versioned preparation ZIP built
+by `tools/package-p1-bootstrap.py`. It contains `tools/prepare-p1.py`, the
+pinned P1 standalone updater/launcher, manifest, guide and license.
+
+The Linux helper checks stock identity over SSH, using a TCP proxy bound to
+the selected USB NIC with `SO_BINDTODEVICE`. It retains SSH host-key checks
+and never falls back to another network route. It stages files in a private
+directory, checks SHA-256 on the device, and uses exclusive hard links to
+publish the installer, launcher and finally the clean flag in `/usrdata`.
+Failure before arming removes only this attempt's files; an armed flag keeps
+its verified installer even if reboot fails. No firmware is installed by the
+helper. On the clean boot, the launcher copies the updater to RAM and removes
+its staging files. The existing P1 browser profile then validates recovery,
+installs the selected bundle and verifies the rebooted firmware.
+
 `devices/fpvos-bundle.js` validates the shared `FPVOSUP1` envelope using each
 board's manifest policy. `devices/fpvos-p1-air.js` uses board ID 1345409867,
 hardware `P1_SKY`, serial `fpvos-p1-air`, and the ordered components `kernel.img`,
