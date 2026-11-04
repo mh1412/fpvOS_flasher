@@ -73,6 +73,8 @@ jobs:
               except Exception as error:
                   raise SystemExit(f'::error::{path}: publish the corresponding source commit {commit} at {manifest["source"]} before deploying updater binaries ({error}).')
           PY
+      - name: Version application modules and recovery assets
+        run: python3 tools/version-site.py _site "$GITHUB_SHA"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

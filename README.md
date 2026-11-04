@@ -226,7 +226,9 @@ Keep local firmware fixtures and hardware-test output under `.local/`, which
 is ignored by Git.
 
 `.github/workflows/pages.yml` runs Node and simulated-browser checks before
-publishing the site to GitHub Pages.
+publishing the site to GitHub Pages. `tools/version-site.py` gives each deployed
+module graph and its recovery assets URLs under `releases/<commit>/`, so a new
+page loads matching scripts even when older modules remain in the browser cache.
 
 ## License
 
