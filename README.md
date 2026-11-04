@@ -22,7 +22,7 @@ anything is sent, and the device does the flashing itself.
 | Ascent Lite+ air unit | `Ascent_H_Sky_*.img`, stock or fpvOS | same image and updater as Lite; **not yet on hardware** |
 | Ascent VRX (standard, Proxima-9311) | `Ascent_G_Gnd_*.img`, signed stock ASW/OTRA | hardware-tested upgrades through 18.21.10 and unlocked downgrade to 17.5.8 |
 | fpvOS AR9311 on standard VRX | full `.fwu` install or original kernel/DTB restoration bundle | recovery-service path; simulated tests only |
-| BETAFPV P1 Air | full `fpvos-p1-air.fwu` from `p1-air-source` | stock 1.0.44 via the bundled Linux preparation helper; browser installs and updates through fpvOS recovery |
+| BETAFPV P1 Air | full `fpvos-p1-air.fwu` from `p1-air-source` | browser preparation from stock 1.0.44; installs and updates through fpvOS recovery |
 
 **VRX Pro, Avatar, L_Gnd and goggles are not supported profiles.** The standard
 VRX uses board **5 / G_Gnd**.
@@ -55,20 +55,25 @@ signed-stock path is unchanged. The stock-kernel/root-only
 
 ### BETAFPV P1 Air
 
-For **stock P1_SKY v1.0 / firmware 1.0.44.rel**, download the
-[P1 preparation kit](assets/p1-updater/p1-stock-preparation-v1.zip), also linked
-in the page's Device panel. Extract it on Linux with Python 3 and OpenSSH.
-Set the P1 USB network interface to `192.168.3.200/24`, without a gateway,
-then run `python3 prepare-p1.py --check` and `python3 prepare-p1.py --execute`.
-SSH prompts for stock credentials and verifies the host key. The helper pins
-the connection to the selected USB interface, checks the stock identity,
-uploads the bundled installer and launcher, verifies their hashes, and arms
-the one-time clean boot. Existing preparation files/flags are never overwritten.
-See the [included guide](assets/p1-updater/README.txt) for prerequisites and recovery.
+For **stock P1_SKY v1.0 / firmware 1.0.44.rel**, expand “Installing fpvOS on a
+stock BETAFPV P1?” in the Device panel. Confirm the supported model/version,
+then use **Restart stock P1** to select its Sirius serial port. After it restarts,
+use **Load P1 recovery** to select that same unit as **USB download gadget**.
+If it is already in USB download mode, start with Load P1 recovery.
 
-Once the unit appears as **P1 Air recovery**, connect to its fpvOS serial port
+The page downloads hash-pinned recovery assets, checks the known bootloader,
+uploads them to RAM through WebHID and verifies their device-side CRCs before
+booting independent recovery. It does not flash the bootloader. No Linux
+preparation helper, SSH or USB networking is used. Each USB mode requires its
+own browser permission. Keep external power connected throughout.
+
+This path has been tested on Linux Chromium with stock 1.0.44. Windows/macOS
+and other stock versions are not yet qualified. Linux may require a USB/HID
+permission rule; see the [setup and recovery guide](assets/p1-updater/README.txt).
+
+Once recovery starts, select the **P1 Air** serial port
 in the browser and select `fpvos-p1-air.fwu` from the fpvOS `p1-air-source` build.
-An already-installed fpvOS unit can connect directly without the helper. The page
+An already-installed fpvOS unit can connect directly without stock preparation. The page
 enters clean recovery, validates and transfers the full kernel/DTB/rootfs bundle,
 waits for device-side installation and readback, then reboots and checks the
 running package SHA-256. Keep external power connected throughout.
@@ -82,8 +87,7 @@ unit when prompted.
 This profile supports unsigned development bundles for the P1_SKY 1.0.44 NAND
 layout. The firmware updater preserves stock bank 1, factory calibration and
 user settings. Stock P1 images and VRX restoration bundles are not accepted.
-Initial preparation currently requires the Linux helper; subsequent browser
-updates also work on Windows and macOS. Use the
+The browser stock-preparation path is currently qualified on Linux only. See the
 [P1 firmware installation and recovery instructions](https://github.com/mh1412/fpvOS/blob/p1-air-support/br-external/board/p1-air/README.md#persistent-installation-and-usb-recovery)
 for the stock recovery command and firmware details. Keep verified
 device backups and recovery access.
@@ -185,9 +189,8 @@ The app is static ES modules with no build step or runtime packages:
 Use Node 22+, Python 3, `xz`, `tar`, and Chrome/Chromium for the full test suite:
 
 ```sh
-node --test test/test.mjs test/archive.test.mjs test/profiles.test.mjs test/unlock.test.mjs test/fpvos.test.mjs test/bootstrap.test.mjs
-python3 -m unittest discover -s test -p '*_test.py'
-python3 tools/package-p1-bootstrap.py --check
+node --test test/test.mjs test/archive.test.mjs test/profiles.test.mjs test/unlock.test.mjs test/fpvos.test.mjs test/bootstrap.test.mjs test/p1-bootstrap.test.mjs
+python3 tools/package-p1-recovery.py --check
 node test/browser-check.mjs
 ```
 

@@ -1,69 +1,67 @@
-P1 stock-to-fpvOS preparation kit v1
+P1 browser recovery — stock 1.0.44
+================================
 
-This one-time helper prepares a BETAFPV P1 Air on stock P1_SKY v1.0,
-firmware 1.0.44.rel, for installation through fpvOS Flasher. It copies the
-included installer and launcher, verifies their hashes on the device, and
-reboots into clean RAM recovery. It does not install the firmware itself.
+Use desktop Chrome/Edge over HTTPS or localhost. Tested on Linux Chromium;
+Windows/macOS and other stock firmware versions are not yet qualified.
+Standard P1 Air only: not P1 AIO, Matrix, goggles or Ascent hardware.
 
-Requirements
-- Linux with Python 3, OpenSSH client and iproute2. The helper uses no Python
-  packages. Windows/macOS preparation is not implemented by this helper.
-- External power and USB connected to the P1; verified device backups.
-- Stock root SSH access. The standard 1.0.44 password is artosyn; if changed,
-  use your password. SSH prompts normally; no password is saved by the helper.
-- Set the P1 USB network interface to 192.168.3.200 with prefix 24, no gateway
-  and no DNS server. The P1 uses 192.168.3.100. Use your Linux network settings;
-  this helper does not change network configuration or routes.
+1. Connect USB and external power and let stock firmware finish starting.
+   Disconnect other Artosyn devices.
+2. In the flasher's Device panel, expand the stock P1 instructions and confirm
+   that the unit is a standard P1 Air running stock 1.0.44.
+3. Click Restart stock P1 and select its Sirius serial port.
+4. Wait for USB to reconnect. Click Load P1 recovery and select the same unit,
+   now called USB download gadget. Already in this mode? Start at this step.
+5. When recovery starts, click Connect and select the P1 Air serial port. Choose a
+   valid fpvos-p1-air.fwu file and click Flash. Keep power connected until
+   installation and the reboot verification finish.
 
-Use
-1. Extract this entire ZIP into one directory and open a terminal there.
-2. Verify the connection and files without staging anything:
-     python3 prepare-p1.py --check
-3. Prepare and reboot the unit:
-     python3 prepare-p1.py --execute
-4. Keep power connected. When P1 Air recovery appears on USB, return to the
-   flasher page, click Connect and select the fpvOS P1 port. Choose the full
-   fpvos-p1-air.fwu from the p1-air-source firmware build, then click Flash.
-   The browser verifies clean recovery, transfers the bundle, waits for NAND
-   installation/readback, reboots and checks the running firmware hash.
+These are different USB identities of ONE physical P1. Browser permissions are
+separate for its stock serial port, bootloader HID and fpvOS recovery serial port.
+No SSH, USB networking, Python program or local preparation helper is needed.
+Preparation only writes RAM. Firmware is installed by the existing P1 updater,
+which preserves stock bank 1, factory calibration and user settings.
 
-If more than one matching USB network interface is present, specify the P1:
-  python3 prepare-p1.py --interface enx0123456789ab --execute
-The helper only uses that USB interface, with no fallback route to another
-device at the same IP address. OpenSSH verifies its host key. Verify a new
-fingerprint through your trusted device records before accepting it. Existing
-known_hosts entries are respected; --known-hosts FILE selects another file.
+Linux USB permissions
+---------------------
+If the browser lists the bootloader but cannot open it, close other updaters.
+Linux may also require a local HID access rule. An administrator can put this
+line in /etc/udev/rules.d/70-fpvos-p1.rules:
 
-Preparation refuses an existing /usrdata/fpvos-update,
-/usrdata/fpvos-bootstrap.sh, /usrdata/sirius-clean-system-flag or helper lock.
-Inspect earlier preparation before retrying; do not blindly delete these.
-An interrupted transfer before arming cleans up this helper's staging files.
-After the clean flag is armed, verified installer files are retained if reboot
-or SSH fails. Do not run preparation a second time while that flag exists.
-The source updater checks stock runtime and NAND geometry before installing.
-The clean launcher consumes its flag and removes its staging files after
-copying the installer to RAM. Normal fpvOS updates use built-in recovery.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1d6b", ATTRS{idProduct}=="0100", TAG+="uaccess"
 
-Stock P1 USB serial only requests entry to the vendor USB bootloader. It does
-not expose the Ascent VRX file-transfer protocol. This kit uses stock SSH over
-USB networking; it does not replace bootloaders or use the vendor flash path.
-Only the subsequent browser Flash action installs firmware. Factory data,
-stock bank 1 and existing user settings are preserved by the P1 updater.
+Reload udev rules, then reconnect the USB device. This grants the active local
+user access to matching Artosyn bootloader HID devices; it does not identify a
+particular board. Serial ports also need the usual local serial permissions.
+This is an operating-system access setting, not a firmware preparation helper.
 
-Source and maintenance
-Installer and launcher source:
-  https://github.com/mh1412/fpvOS/tree/e32ea69aac26fec989a8a7f48419356846702d41
-The manifest records this revision and the exact executable/launcher hashes.
-The executable includes BusyBox and P1 recovery helpers. GPL-2.0-or-later
-applies to fpvos-update; BusyBox is GPL-2.0. See COPYING and the corresponding
-source revision's Buildroot pins, package recipes and busybox fragments.
-Build with ./build.sh p1-air-source in that source tree. For an existing
-configured build, make -C output/p1-air-source fpvos-update-dirclean and then
-make -C output/p1-air-source fpvos-update rebuild this standalone installer.
-The complete firmware build currently needs the documented Kestrel source
-override; the standalone installer does not contain Kestrel or camera blobs.
+Recovery after interruption
+---------------------------
+Before Flash: retry Load P1 recovery if USB download gadget is still present.
+Power-cycle to discard temporary RAM changes and return to installed firmware.
+An unknown bootloader/fingerprint must not be forced through the checks.
+During Flash: keep power connected and allow the updater to finish. If an
+installation fails, save the log and inspect the selected boot mode; do not
+repeatedly flash unverified images. This does not recover damaged SPL/U-Boot.
 
-In fpvOS_flasher, tools/prepare-p1.py is the maintained helper. To refresh the
-download after helper changes, run python3 tools/package-p1-bootstrap.py.
-CI checks that the download exactly matches its source files. Changed binary
-releases require a new version directory, manifest pin and available source.
+Source and assets
+-----------------
+Kernel and DTB: https://github.com/mh1412/fpvOS
+Commit: e32ea69aac26fec989a8a7f48419356846702d41
+Build: ./build.sh p1-air-source
+Files: output/p1-air-source/images/kernel.img and betafpv-p1-air.dtb
+The kernel embeds the independent fpvos-recovery root and P1 updater.
+
+browser-v1/manifest.json pins exact sizes, SHA-256 hashes, RAM destinations and
+supported bootloader fingerprints. The flasher pins the manifest hash too.
+The 1.0.44 bootloader RAM layout is deliberately version-specific. A one-byte
+protocol adaptation is necessary before readable bootloader identification;
+all later callback/image writes require matching fingerprints and dispatch data.
+No proprietary bootloader code is distributed or flashed by this page.
+
+browser-v1/recovery-init is based on fpvos-recovery/src/init at the source commit
+above, with NAND-root loading disabled so preparation always enters recovery.
+Run python3 tools/package-p1-recovery.py to rebuild recovery-initrd.img, or add
+--check to verify it. Its deterministic newc/gzip archive contains only /init
+and overlays the embedded recovery root. The 64-byte uImage wrapper is generated
+locally; it is not a stock firmware image. See COPYING for GPL-2.0.
