@@ -159,8 +159,21 @@ not covered.
   node test/flash-node.mjs flash IMG
   ```
 
-- `.github/workflows/pages.yml`: runs the tests, then publishes the page
-  (without `test/`) to GitHub Pages on every push to `main`.
+- `.github/workflows/pages.yml`: runs the tests on every push to `main` and
+  every pull request. It publishes the commit the `live` tag points to
+  (without `test/`) to GitHub Pages, so `main` can move on without changing
+  the page:
+
+  ```bash
+  git tag -f live COMMIT && git push -f origin live
+  ```
+
+  A commit whose workflow has no `live` trigger (an older one, a fork's pull
+  request) is published by hand after moving the tag:
+
+  ```bash
+  gh workflow run pages.yml --ref main
+  ```
 
 Firefox and Safari have no Web Serial, so the page does not work in them.
 

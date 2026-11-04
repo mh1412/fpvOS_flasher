@@ -1,12 +1,21 @@
 name: pages
 
-# Tests, then publishes the page (index.html, the top-level modules and fonts;
-# not the tests) to GitHub Pages, which serves it over https as Web Serial needs.
-# One-time setup: Settings > Pages > Build and deployment > Source: GitHub Actions.
+# Tests every push to main and every pull request. Publishes the commit the
+# `live` tag points to (index.html, its modules and fonts; not the tests) to
+# GitHub Pages, which serves it over https as Web Serial needs, so main can
+# move on without changing the page. To publish a commit:
+#   git tag -f live <commit> && git push -f origin live
+# A tag push runs this file as it is in the tagged commit: a commit without
+# the `live` trigger (an older one, a fork's pull request) is published by hand:
+#   gh workflow run pages.yml --ref main
+# One-time setup: Settings > Pages > Build and deployment > Source: GitHub Actions;
+# Settings > Environments > github-pages > Deployment branches and tags: main and
+# the tag `live`.
 
 on:
   push:
     branches: [main]
+    tags: [live]
   pull_request:
   workflow_dispatch:
 
@@ -17,6 +26,8 @@ permissions:
 
 jobs:
   test:
+    # a run by hand publishes `live` as it is: its tests may differ from main's
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -26,7 +37,8 @@ jobs:
       - run: node --test test/test.mjs test/archive.test.mjs
 
   deploy:
-    if: github.event_name != 'pull_request'
+    # a push of `live` once its tests pass, or a run by hand (test skipped)
+    if: ${{ !failure() && !cancelled() && (github.ref == 'refs/tags/live' || github.event_name == 'workflow_dispatch') }}
     needs: test
     runs-on: ubuntu-24.04
     # one deploy at a time; a newer push waits rather than cutting one short
@@ -38,11 +50,17 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/live
       - name: Site
+        # every tracked file but the tests, docs and repository files, so the
+        # step fits whatever layout the tagged commit has
         run: |
           mkdir -p _site
-          cp index.html *.js _site/
-          cp -r fonts _site/
+          git archive HEAD | tar -x -C _site
+          cd _site
+          rm -rf .github test docs .gitignore .gitattributes README.md LICENSE
+          find . -name '*.mjs' -delete
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
