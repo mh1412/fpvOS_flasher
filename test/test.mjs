@@ -5,15 +5,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
-  CMD, FrameParser, Session, encodeFrame, crc32, md5hex, parseAsw, flashImage,
-  encodeFileStart, firmwareVersion,
-} from '../ascent.js';
-import { SimUnit, SimLink } from './sim.mjs';
-
-const here = path.dirname(fileURLToPath(import.meta.url));
+  CMD, FrameParser, encodeFrame, crc32, md5hex,
+  encodeFileStart,
+} from '../transports/ascent.js';
+import { parseAirImage } from '../devices/ascent-air.js';
+import { firmwareVersion } from '../firmware.js';
+import { openSimulatedDevice } from './sim.mjs';
+import { airImage as asw } from './fixtures.mjs';
+import { getProfile } from '../devices/index.js';
+import { flashFirmware } from '../flasher.js';
 
 // The packet enable_rndis.py sends (cmd 59, seq 0), known to work on the unit.
 const RNDIS = Uint8Array.from([
@@ -77,31 +79,8 @@ test('firmware version from the device string', () => {
 
 // ----------------------------------------------------------------- images --
 
-function asw(version = [18, 21, 10], board = 3) {
-  const secLen = [0x100, 0x80, 0x200, 0x300, 0x400];
-  const ids = [0, 1, 2, 4, 5];
-  const total = 0x80 + secLen.reduce((a, b) => a + b);
-  const d = new Uint8Array(total);
-  const v = new DataView(d.buffer);
-  d.set(Buffer.from('ASW\0'));
-  v.setUint32(4, board, true);
-  version.forEach((n, i) => v.setUint32(8 + 4 * i, n, true));
-  let off = 0x80;
-  ids.forEach((id, i) => {
-    const o = 0x14 + 12 * i;
-    d[o] = id; d[o + 1] = 1; d[o + 2] = 1;
-    v.setUint32(o + 4, 0x80000, true);
-    v.setUint32(o + 8, off, true);
-    d.set(randomBytes(secLen[i]), off);
-    off += secLen[i];
-  });
-  v.setUint32(0x74, total, true);
-  v.setUint32(0x70, crc32(d.subarray(0x80)), true);
-  return d;
-}
-
 test('asw: good, damaged, truncated, ground, odd names', () => {
-  const good = parseAsw(asw(), 'Ascent_H_Sky_18_21_10.img');
+  const good = parseAirImage(asw(), 'Ascent_H_Sky_18_21_10.img');
   assert.deepEqual(good.errors, []);
   assert.deepEqual(good.warnings, []);
   assert.equal(good.remoteName, 'Ascent_H_Sky_18_21_10.img');
@@ -109,21 +88,21 @@ test('asw: good, damaged, truncated, ground, odd names', () => {
 
   const dmg = asw();
   dmg[0x500] ^= 1;
-  assert.match(parseAsw(dmg).errors.join(), /Checksum/);
-  assert.match(parseAsw(asw().subarray(0, 0x400)).errors.join(), /truncated/);
-  assert.match(parseAsw(asw([17, 5, 8], 5)).errors.join(), /Ascent Goggles \(G_Gnd\), which this page cannot flash yet/);
-  assert.match(parseAsw(new Uint8Array(200)).errors.join(), /ASW/);
+  assert.match(parseAirImage(dmg).errors.join(), /Checksum/);
+  assert.match(parseAirImage(asw().subarray(0, 0x400)).errors.join(), /truncated/);
+  assert.match(parseAirImage(asw([17, 5, 8], 5)).errors.join(), /Ascent VRX \(G_Gnd\), not an H_Sky air unit/);
+  assert.match(parseAirImage(new Uint8Array(200)).errors.join(), /ASW/);
 
-  const renamed = parseAsw(asw(), 'Ascent_H_Sky_18_21_10 (1).img');
+  const renamed = parseAirImage(asw(), 'Ascent_H_Sky_18_21_10 (1).img');
   assert.match(renamed.warnings.join(), /no version/);
   assert.equal(renamed.remoteName, 'Ascent_H_Sky_18_21_10.img');
-  assert.match(parseAsw(asw(), 'Ascent_H_Sky_18_21_9.img').warnings.join(), /says 18.21.9/);
+  assert.match(parseAirImage(asw(), 'Ascent_H_Sky_18_21_9.img').warnings.join(), /says 18.21.9/);
 });
 
 const realImage = process.env.ASCENT_IMG;
 
 test('asw: a real image', { skip: realImage && existsSync(realImage) ? false : 'set ASCENT_IMG' }, () => {
-  const r = parseAsw(new Uint8Array(readFileSync(realImage)), path.basename(realImage));
+  const r = parseAirImage(new Uint8Array(readFileSync(realImage)), path.basename(realImage));
   assert.deepEqual(r.errors, []);
   assert.deepEqual(r.sections.map((s) => s.name), ['boot', 'env', 'kernel', 'rootfs', 'fpv']);
 });
@@ -131,17 +110,16 @@ test('asw: a real image', { skip: realImage && existsSync(realImage) ? false : '
 // ------------------------------------------------------------------ flash --
 
 async function simFlash(opts = {}, image = asw()) {
-  const unit = new SimUnit(opts);
-  const link = new SimLink(unit);
-  await link.open();
   const logs = [];
-  const session = new Session(link, (m, l = 'info') => logs.push(`${l} ${m}`));
-  const info = await session.deviceInfo();
+  const profile = getProfile('ascent-air');
+  const { unit, session, info } = await openSimulatedDevice(profile, opts, (m, l = 'info') => logs.push(`${l} ${m}`));
   const stages = [];
-  const parsed = parseAsw(image, 'x.img');
-  const after = await flashImage(session, {
-    bytes: image, md5: md5hex(image), remoteName: parsed.remoteName, chunkSize: opts.chunk ?? 0x180,
-  }, { progress: (p) => stages.push(p.stage), log: (m, l = 'info') => logs.push(`${l} ${m}`), dataTimeoutMs: 500 });
+  const parsed = parseAirImage(image, 'x.img');
+  parsed.profileId = profile.meta.id;
+  info.maxChunk = opts.chunk ?? 0x180;
+  const after = await flashFirmware(session, profile, {
+    bytes: image, md5: md5hex(image), parsed,
+  }, { info, progress: (p) => stages.push(p.stage), log: (m, l = 'info') => logs.push(`${l} ${m}`), dataTimeoutMs: 500 });
   return { unit, info, after, stages, logs };
 }
 
@@ -149,17 +127,17 @@ test('flash against the simulated unit', async () => {
   const img = asw();
   const { unit, info, after, stages } = await simFlash({}, img);
   assert.equal(info.firmware, 'Ascent_H_Sky_18_21_10');
-  assert.equal(info.maxChunk, 1 << 20);
+  assert.equal(info.maxChunk, 0x180);
   assert.deepEqual(Buffer.compare(unit.file.data, Buffer.from(img)), 0);
   assert.equal(unit.file.path, '/tmp/pc/Ascent_H_Sky_18_21_10.img');
   assert.equal(unit.file.md5, createHash('md5').update(img).digest('hex'));
   assert.equal(after.firmware, 'Ascent_H_Sky_18_21_10');
   assert.deepEqual([...new Set(stages)], ['clean', 'upload', 'install', 'restart', 'done']);
   const order = unit.received.filter((c) => c !== CMD.UPGRADE_STATUS && c !== CMD.FILE_DATA);
-  assert.deepEqual(order, [CMD.FIND_DEVICE, CMD.REBOOT, CMD.REMOTE_UPGRADE, CMD.FILE_START, CMD.FILE_END, CMD.FIND_DEVICE]);
+  assert.deepEqual(order, [CMD.FIND_DEVICE, CMD.REBOOT, CMD.FIND_DEVICE, CMD.REMOTE_UPGRADE, CMD.FILE_START, CMD.FILE_END, CMD.FIND_DEVICE]);
 });
 
-test('flash with real-size chunks (1 MiB) and a 3.5 MiB image', async () => {
+test('air flash accepts zero-length acknowledgments with exact counters across 1 MiB and partial chunks', async () => {
   const img = asw();
   const big = new Uint8Array(3.5 * (1 << 20));
   big.set(img);
@@ -167,8 +145,8 @@ test('flash with real-size chunks (1 MiB) and a 3.5 MiB image', async () => {
   // grow the last section to the new end of file and fix the header
   v.setUint32(0x74, big.length, true);
   v.setUint32(0x70, crc32(big.subarray(0x80)), true);
-  assert.deepEqual(parseAsw(big).errors, []);
-  const { unit } = await simFlash({ chunk: 1 << 20 }, big);
+  assert.deepEqual(parseAirImage(big).errors, []);
+  const { unit } = await simFlash({ chunk: 1 << 20, dataAckLength: 0 }, big);
   assert.equal(Buffer.compare(unit.file.data, Buffer.from(big)), 0);
   assert.equal(unit.file.chunks.length, 4);
 });

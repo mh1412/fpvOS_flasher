@@ -1,0 +1,2 @@
+# Bootstrap hashes cover exact bytes, including the launcher and manifest.
+assets/ar9311-updater/** -text

@@ -1,9 +1,9 @@
 name: pages
 
 # Tests every push to main and every pull request. Publishes the commit the
-# `live` tag points to (index.html, its modules and fonts; not the tests) to
-# GitHub Pages, which serves it over https as Web Serial needs, so main can
-# move on without changing the page. To publish a commit:
+# `live` tag points to (index.html, application modules, assets and fonts; not
+# the tests) to GitHub Pages, which serves it over https as Web Serial needs, so
+# main can move on without changing the page. To publish a commit:
 #   git tag -f live <commit> && git push -f origin live
 # A tag push runs this file as it is in the tagged commit: a commit without
 # the `live` trigger (an older one, a fork's pull request) is published by hand:
@@ -21,8 +21,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
   test:
@@ -34,13 +32,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node --test test/test.mjs test/archive.test.mjs
+      - run: node --test test/test.mjs test/archive.test.mjs test/profiles.test.mjs test/unlock.test.mjs test/fpvos.test.mjs test/bootstrap.test.mjs test/p1-bootstrap.test.mjs
+      - name: P1 recovery image
+        run: |
+          python3 tools/package-p1-recovery.py --check
+      - name: Browser integration (simulated devices)
+        run: node test/browser-check.mjs
 
   deploy:
     # a push of `live` once its tests pass, or a run by hand (test skipped)
     if: ${{ !failure() && !cancelled() && (github.ref == 'refs/tags/live' || github.event_name == 'workflow_dispatch') }}
     needs: test
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     # one deploy at a time; a newer push waits rather than cutting one short
     concurrency:
       group: pages
@@ -53,14 +60,20 @@ jobs:
         with:
           ref: refs/tags/live
       - name: Site
-        # every tracked file but the tests, docs and repository files, so the
-        # step fits whatever layout the tagged commit has
+        # every tracked file but the tests, docs, tools and repository files, so
+        # the step fits whatever layout the tagged commit has
         run: |
           mkdir -p _site
           git archive HEAD | tar -x -C _site
           cd _site
-          rm -rf .github test docs .gitignore .gitattributes README.md LICENSE
+          rm -rf .github test docs tools .gitignore .gitattributes README.md LICENSE
           find . -name '*.mjs' -delete
+      - name: Version application modules and recovery assets
+        # the tagged commit, not $GITHUB_SHA: a run by hand runs on main
+        run: |
+          if [ -f tools/version-site.py ]; then
+            python3 tools/version-site.py _site "$(git rev-parse HEAD)"
+          fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

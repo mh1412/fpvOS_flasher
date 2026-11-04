@@ -1,11 +1,12 @@
-// A fake air unit behind a fake link, for the Node tests. It plays the
+// A fake Ascent device behind a fake link, for the Node tests. It plays the
 // updater's side as the PC tool expects it; what the real unit does beyond
 // that is unknown, so keep this simple.
 
 import { createHash } from 'node:crypto';
 import {
-  CMD, FrameParser, encodeFrame, parseDeviceInfo, sleep,
-} from '../ascent.js';
+  CMD, FrameParser, encodeFrame, sleep,
+} from '../transports/ascent.js';
+import { firmwareVersion, compareVersions } from '../firmware.js';
 
 const te = new TextEncoder();
 const td = new TextDecoder();
@@ -24,12 +25,16 @@ export class SimUnit {
   constructor(opts = {}) {
     this.opts = {
       firmware: 'Ascent_H_Sky_18_21_10',
+      name: 'Ascent_H_Sky',
+      hardware: 'HW_V1.0',
+      serial: 'SIM0001',
       bootMs: 50,
       installSteps: 5,
       dropReply: new Set(),      // commands whose first reply is lost
       junk: false,               // send noise before replies
       split: 0,                  // deliver replies in pieces of this size
       badMd5: false,
+      installFirmware: true,
       ...opts,
     };
     this.mode = 'normal';
@@ -39,6 +44,8 @@ export class SimUnit {
     this.file = null;
     this.received = [];          // commands seen
     this.status = 0;
+    this.staged = new Map();
+    this.starts = [];
   }
 
   receive(bytes) {
@@ -69,35 +76,53 @@ export class SimUnit {
   handle(f) {
     switch (f.cmd) {
       case CMD.FIND_DEVICE:
+        const info = this.mode === 'unlocked' ? { ...this.opts, firmware: 'Ascent_G_Gnd_0_0_0', serial: '', hardware: 'FPV-Ascent-Gnd-485-V0.0-0.0', sdk: '0.0.0' }
+          : this.mode === 'clean' ? { ...this.opts, ...this.opts.cleanInfo } : this.opts;
         return this.reply(f, struct(300, ({ i32, str }) => {
           i32(0, 1 << 20);
-          str(4, 'v1.0');
-          str(36, 'Ascent_H_Sky');
-          i32(100, 48);
-          str(104, this.opts.firmware);
-          str(168, 'SIM0001');
-          str(200, 'HW_V1.0');
+          str(4, info.sdk ?? 'v1.0');
+          str(36, info.name);
+          i32(100, info.cpuTemp ?? 48);
+          str(104, info.firmware);
+          str(168, info.serial);
+          str(200, info.hardware);
+          i32(232, info.status ?? 0); str(236, info.detail ?? 'OK');
         }));
       case CMD.REBOOT: {
         this.reply(f);
         const mode = td.decode(f.payload).replace(/\0+$/, '');
-        return this.reboot(mode === 'clean' ? 'clean' : 'normal');
+        let next = mode === 'clean' ? 'clean' : 'normal';
+        if (mode === 'normal' && this.staged.has('/factory/sirius-clean-system-flag')) {
+          const flag = td.decode(this.staged.get('/factory/sirius-clean-system-flag'));
+          const scriptPath = /^web:(\/usrdata\/fpvos-unlock-[a-f0-9]{32}\.sh)\n$/.exec(flag)?.[1];
+          const script = scriptPath && this.staged.get(scriptPath);
+          this.staged.delete('/factory/sirius-clean-system-flag');
+          if (scriptPath) this.staged.delete(scriptPath);
+          next = script && td.decode(script).includes('APP_VERSION=0.0.0') && !this.opts.unlockFails ? 'unlocked' : 'clean';
+        }
+        return this.reboot(next);
       }
       case CMD.REMOTE_UPGRADE:
-        if (this.mode !== 'clean') return undefined;   // assumption: silent outside clean mode
-        return this.reply(f);
+        if (this.mode !== 'clean' && this.mode !== 'unlocked' && !this.opts.allowNormalPrepare) return undefined;
+        this.file = null;
+        return this.reply(f, struct(68, ({ i32, str }) => { i32(0, 0); str(4, 'OK'); }));
       case CMD.FILE_START: {
         const p = f.payload;
         const v = new DataView(p.buffer, p.byteOffset);
         const s = (off, len) => td.decode(p.subarray(off, off + len)).replace(/\0.*$/s, '');
         this.file = { md5: s(0, 64), length: v.getInt32(64, true), path: s(72, 128), local: s(200, 128), chunks: [] };
-        return this.reply(f);
+        this.starts.push(this.file.path);
+        return this.reply(f, struct(68, ({ i32, str }) => {
+          i32(0, this.opts.rejectStaging && !this.file.path.endsWith('.img') ? -1 : 0); str(4, 'OK');
+        }));
       }
       case CMD.FILE_DATA: {
         this.file.chunks.push(f.payload);
         const cur = this.file.chunks.reduce((n, c) => n + c.length, 0);
+        if (!this.file.path.endsWith('.img')) this.staged.set(this.file.path, new Uint8Array(Buffer.concat(this.file.chunks)));
         return this.reply(f, struct(80, ({ i32, str }) => {
-          i32(0, f.payload.length); i32(4, cur); i32(8, this.file.length); i32(12, 0); str(16, 'OK');
+          i32(0, this.opts.dataAckLength ?? f.payload.length); i32(4, this.opts.badDataCount ? cur + 1 : cur);
+          i32(8, this.file.length + (this.opts.badDataTotal ? 1 : 0)); i32(12, this.opts.rejectData ? -1 : 0); str(16, this.opts.rejectData ? 'write failed' : 'OK');
         }));
       }
       case CMD.FILE_END: {
@@ -105,14 +130,22 @@ export class SimUnit {
         this.file.data = data;
         const md5 = createHash('md5').update(data).digest('hex');
         const ok = !this.opts.badMd5 && md5 === this.file.md5 && data.length === this.file.length;
+        this.rollbackRejected = this.opts.enforceRollback && compareVersions(firmwareVersion(this.file.path.replace(/\.img$/, '')),
+          this.mode === 'unlocked' ? [0, 0, 0] : firmwareVersion(this.opts.firmware)) < 0;
         return this.reply(f, struct(80, ({ i32, str }) => {
           i32(8, data.length); i32(12, ok ? 0 : -1); str(16, ok ? 'OK' : 'md5 check fail');
         }));
       }
       case CMD.UPGRADE_STATUS: {
         this.status = Math.min(100, this.status + Math.ceil(100 / this.opts.installSteps));
-        this.reply(f, struct(72, ({ i32, str }) => { i32(0, this.status); str(8, this.status >= 100 ? 'SUCCESS' : 'WRITING'); }));
-        if (this.status >= 100) setTimeout(() => this.reboot('normal'), 20);
+        this.reply(f, struct(72, ({ i32, str }) => {
+          i32(0, this.rollbackRejected ? 0 : this.opts.installPercent ?? this.status); i32(4, this.rollbackRejected ? -6 : this.opts.installStatus ?? 0);
+          str(8, this.opts.installDetail ?? (this.status >= 100 ? 'SUCCESS' : 'WRITING'));
+        }));
+        if (this.status >= 100 && !this.rollbackRejected && !(this.opts.installStatus < 0)) {
+          if (this.opts.installFirmware) this.opts.firmware = this.file.path.slice(this.file.path.lastIndexOf('/') + 1).replace(/\.img$/, '');
+          setTimeout(() => this.reboot('normal'), 20);
+        }
         return undefined;
       }
       default:
@@ -172,4 +205,9 @@ export class SimLink {
   }
 }
 
-export { parseDeviceInfo };
+export async function openSimulatedDevice(profile, opts = {}, log) {
+  const unit = new SimUnit(opts), link = new SimLink(unit);
+  await link.open();
+  const session = profile.transport.protocol.createSession(link, log, profile.transport);
+  return { unit, link, session, info: await session.deviceInfo() };
+}

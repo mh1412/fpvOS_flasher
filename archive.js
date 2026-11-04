@@ -27,9 +27,10 @@ const bytesOf = async (blob) => new Uint8Array(await blob.arrayBuffer());
 // file: a File or Blob with a name.
 // wanted(name): true for an image name a device here can take, used to pick
 //   one entry out of a zip or tar (compression suffixes are ignored).
+// family(name): optional hardware family; mixed-family matches require a target.
 // onProgress(text): what is being done, for the UI.
 // Returns { name, bytes, trail: [container names, outermost first], notes: [] }.
-export async function openFirmware(file, { wanted = () => false, onProgress = () => {} } = {}) {
+export async function openFirmware(file, { wanted = () => false, family = () => null, onProgress = () => {} } = {}) {
   const notes = [];
   return open(file, file.name ?? 'file', [], 0);
 
@@ -71,12 +72,19 @@ export async function openFirmware(file, { wanted = () => false, onProgress = ()
   function choose(entries, archive) {
     const files = entries.filter((e) => !e.name.endsWith('/'));
     let hits = files.filter((e) => wanted(stripCompression(baseName(e.name))));
-    if (!hits.length) hits = files.filter((e) => /\.img$/i.test(stripCompression(e.name)));
+    if (!hits.length) hits = files.filter((e) => /\.(img|fwu)$/i.test(stripCompression(e.name)));
     if (!hits.length) {
       const list = files.slice(0, 8).map((e) => baseName(e.name)).join(', ');
       throw new ArchiveError(`No firmware image in ${archive}${list ? ` (it has ${list}${files.length > 8 ? ', ...' : ''})` : ''}.`);
     }
     if (hits.length > 1) {
+      if (hits.some((e) => /\.fwu$/i.test(stripCompression(e.name)))) {
+        throw new ArchiveError(`${archive} contains multiple update bundles/images; select one explicitly.`);
+      }
+      const families = new Set(hits.map((e) => family(stripCompression(baseName(e.name)))).filter(Boolean));
+      if (families.size > 1) {
+        throw new ArchiveError(`${archive} contains images for different hardware. Connect a device or select a hardware profile first.`);
+      }
       // the newest by the version in the name
       const ver = (e) => (/(\d+)_(\d+)_(\d+)\.img/i.exec(e.name) ?? [0, 0, 0, 0]).slice(1).map(Number);
       hits.sort((a, b) => {

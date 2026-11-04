@@ -1,9 +1,11 @@
-// Flashing an Ascent air unit over its USB serial port.
+// Shared Ascent wire protocol and transfer primitives. Device policy and
+// preflash/flash/postflash orchestration live outside this module.
 //
 // This speaks the protocol of the vendor's PC tool (read from a decompile of its
-// Windows build, v2.0.40) to the updater on the unit (ar_fpvhs_upgrade). The
-// unit does the flashing itself: it checks the frame CRCs and the file's MD5,
-// writes the inactive bank and switches banks. The host only ships the file.
+// Windows build, v2.0.40) to ar_fpvhs_upgrade (air) or ar_fpv_upgrade (VRX). The
+// unit does the flashing itself: it checks the frame CRCs and the file's MD5.
+// Image authentication and single/paired flash-write behavior depend on the
+// hardware profile. The host only ships the file; see devices/ and stages/.
 //
 // No browser APIs in here: the transport ("link") is passed in, so the Web
 // Serial page and the Node tests share this file. A link has
@@ -12,7 +14,7 @@
 //   closed                             - a promise that settles when the port goes away
 //   reopen({timeoutMs})                - waits for the unit to come back after a reboot
 
-import { crc32 } from './checksum.js';
+import { crc32 } from '../checksum.js';
 
 export const CMD = Object.freeze({
   UNKNOWN: 0,             // the unit's reply to a command it does not know
@@ -246,88 +248,6 @@ export function md5hex(bytes) {
   return Array.from(out, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// ----------------------------------------------------------- ASW images --
-// ASW firmware container. Air-unit (board 3, "H_Sky") header:
-//   0x00 "ASW\0"  0x04 board  0x08/0x0c/0x10 version major/minor/patch
-//   0x14 5 x {u8 id, u8 flags[3], u32 alloc, u32 file offset}
-//   0x70 CRC-32 of bytes 0x80..EOF  0x74 total size
-// Ground images (boards 1 and 5) use another layout and are not handled here.
-
-export const BOARD_NAMES = { 1: 'Ascent VRX (L_Gnd)', 3: 'Ascent air unit (H_Sky)', 5: 'Ascent Goggles (G_Gnd)' };
-export const AIR_PRODUCT = 'Ascent_H_Sky';
-const SECTION_NAMES = { 0: 'boot', 1: 'env', 2: 'kernel', 4: 'rootfs', 5: 'fpv' };
-// NAND partitions from the stock env's mtdparts. The section table's "alloc"
-// is not a limit: stock's own kernel is longer than its alloc.
-const PART_SIZE = { 2: 4 << 20, 4: 16 << 20, 5: 32 << 20 };
-
-export function parseAsw(bytes, fileName = '') {
-  const errors = [];
-  const warnings = [];
-  const r = { errors, warnings, sections: [] };
-  if (bytes.length < 0x80 || td.decode(bytes.subarray(0, 4)) !== 'ASW\0') {
-    errors.push('Not a firmware image this page knows (no ASW header).');
-    return r;
-  }
-  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  r.board = v.getUint32(4, true);
-  r.boardName = BOARD_NAMES[r.board] ?? `unknown board ${r.board}`;
-  r.version = [v.getUint32(8, true), v.getUint32(12, true), v.getUint32(16, true)];
-  r.versionText = r.version.join('.');
-  if (r.board !== 3) {
-    errors.push(`This image is for the ${r.boardName}, which this page cannot flash yet.`);
-    return r;
-  }
-  r.sizeStored = v.getUint32(0x74, true);
-  r.crcStored = v.getUint32(0x70, true);
-  r.crcCalc = crc32(bytes.subarray(0x80));
-  if (r.sizeStored !== bytes.length) {
-    errors.push(`The file is ${bytes.length} bytes but its header says ${r.sizeStored}: truncated or damaged.`);
-  }
-  if (r.crcStored !== r.crcCalc) errors.push('Checksum mismatch: the file is damaged.');
-
-  for (let i = 0; i < 5; i++) {
-    const o = 0x14 + 12 * i;
-    r.sections.push({
-      id: bytes[o],
-      name: SECTION_NAMES[bytes[o]] ?? `id${bytes[o]}`,
-      upgrade: bytes[o + 1] === 1,
-      alloc: v.getUint32(o + 4, true),
-      offset: v.getUint32(o + 8, true),
-    });
-  }
-  r.sections.forEach((s, i) => {
-    const end = i + 1 < r.sections.length ? r.sections[i + 1].offset : bytes.length;
-    s.length = end - s.offset;
-    if (s.offset < 0x80 || s.length < 0 || end > bytes.length) {
-      errors.push(`Section ${s.name} lies outside the file.`);
-    } else if (PART_SIZE[s.id] && s.length > PART_SIZE[s.id]) {
-      errors.push(`Section ${s.name} (${s.length} bytes) does not fit its ${PART_SIZE[s.id] >> 20} MiB partition.`);
-    }
-  });
-
-  // The unit takes the version from the file name and looks for
-  // Ascent_H_Sky_*.img, so the file goes over under its canonical name.
-  r.remoteName = `${AIR_PRODUCT}_${r.version.join('_')}.img`;
-  const m = /(\d+)_(\d+)_(\d+)\.img$/i.exec(fileName);
-  if (fileName && !m) {
-    warnings.push(`The file name has no version; it will be sent as ${r.remoteName}.`);
-  } else if (m && m.slice(1).join('.') !== r.versionText) {
-    warnings.push(`The file name says ${m.slice(1).join('.')} but the image is ${r.versionText}; it will be sent as ${r.remoteName}.`);
-  }
-  return r;
-}
-
-// "Ascent_H_Sky_18_21_10" -> [18, 21, 10]; the unit's FIND_DEVICE firmware field
-export function firmwareVersion(fw) {
-  const m = /(\d+)_(\d+)_(\d+)$/.exec(fw ?? '');
-  return m ? m.slice(1).map(Number) : null;
-}
-
-export function compareVersions(a, b) {
-  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i];
-  return 0;
-}
-
 // ----------------------------------------------------------------- session --
 
 export class LinkLostError extends Error {
@@ -351,9 +271,10 @@ export function withTimeout(promise, ms, msg) {
 // a new seq (as the PC tool does), and a late reply to any earlier attempt
 // still counts.
 export class Session {
-  constructor(link, log = () => {}) {
+  constructor(link, log = () => {}, settings = ASCENT_TRANSPORT) {
     this.link = link;
     this.log = log;
+    this.settings = settings;
     this.parser = new FrameParser();
     this.seq = 1;
     this.waiters = new Set();
@@ -374,6 +295,7 @@ export class Session {
   #feed(bytes) {
     const before = this.parser.skipped;
     for (const f of this.parser.push(bytes)) {
+      if (this.settings.strictReplies && (!f.crcOk || f.type !== 2)) continue;
       if (!f.crcOk && !this.crcWarned) {
         this.crcWarned = true;
         this.log(`reply ${cmdName(f.cmd)} has a CRC that does not match (accepted, as the PC tool does)`, 'warn');
@@ -412,7 +334,8 @@ export class Session {
   }
 
   // retryMs 0 = send once and wait the whole timeout.
-  async request(cmd, payload = EMPTY, { expect = cmd, timeoutMs = 8000, retryMs = 2000 } = {}) {
+  async request(cmd, payload = EMPTY, { expect = cmd, timeoutMs = this.settings.timeouts.request,
+    retryMs = this.settings.timeouts.retry } = {}) {
     const seqs = new Set();
     const waiter = this.#waiter((f) => seqs.has(f.seq) && (f.cmd === expect || f.cmd === CMD.UNKNOWN));
     const deadline = Date.now() + timeoutMs;
@@ -448,117 +371,89 @@ export class Session {
   }
 }
 
-// ------------------------------------------------------------------- flash --
+export const ASCENT_PROTOCOL = Object.freeze({
+  createSession: (link, log, settings) => new Session(link, log, settings),
+  networkMode: (session) => session.request(CMD.NETWORK_MODE, EMPTY, { timeoutMs: 3000, retryMs: 0 }),
+});
+export const ASCENT_TRANSPORT = Object.freeze({
+  protocol: ASCENT_PROTOCOL,
+  serial: Object.freeze({ baudRate: 115200, bufferSize: 65536 }),
+  maxChunk: 1 << 20,
+  allowZeroDataAckLength: false,
+  timeouts: Object.freeze({ request: 8000, retry: 2000, data: 30000,
+    updateBoot: 90000, normalBoot: 120000, reboot: 30000, install: 10 * 60000, poll: 500 }),
+});
 
-export function deviceKind(info) {
-  const s = `${info?.firmware ?? ''} ${info?.name ?? ''}`;
-  if (/sky/i.test(s)) return 'air';
-  if (/gnd|goggle|vrx/i.test(s)) return 'ground';
-  return 'unknown';
+export async function sendFileChunks(session, { bytes, chunkSize, timeoutMs, signal, strictCrc = false,
+  allowZeroLength = false, onChunk = () => {} }) {
+  if (!Number.isInteger(chunkSize) || chunkSize < 1) throw new Error('Invalid transfer chunk size.');
+  for (let off = 0; off < bytes.length; off += chunkSize) {
+    if (signal?.aborted) throw new Error('Cancelled.');
+    const part = bytes.subarray(off, Math.min(off + chunkSize, bytes.length));
+    // Never resent: the receiving updater appends each data chunk.
+    const f = await session.request(CMD.FILE_DATA, part, { timeoutMs, retryMs: 0 });
+    const ack = parseFileAck(f.payload), sent = off + part.length;
+    // Some air updaters leave Length at zero. Their cumulative and total
+    // counters still have to match exactly; staging retains strict lengths.
+    const lengthOk = ack.length === part.length || allowZeroLength && ack.length === 0;
+    if (strictCrc && !f.crcOk || ack.status !== 0 || ack.detail !== 'OK' || !lengthOk
+      || ack.cursize !== sent || ack.totalsize !== bytes.length) {
+      throw new Error(`The unit rejected or miscounted chunk ${off / chunkSize + 1}: status ${ack.status} ${ack.detail || '(no detail)'} `
+        + `(length ${ack.length}, expected ${part.length}${allowZeroLength ? ' or 0' : ''}; received ${ack.cursize}/${ack.totalsize}, expected ${sent}/${bytes.length}${strictCrc && !f.crcOk ? '; bad reply CRC' : ''}).`);
+    }
+    onChunk({ index: off / chunkSize + 1, sent, ack });
+  }
 }
 
-// image: { bytes, remoteName, md5 (hex), localName }
-// progress({stage, frac, text}); stages: clean, upload, install, restart, done
-export async function flashImage(session, image, { progress = () => {}, log = () => {}, signal, dataTimeoutMs = 30000 } = {}) {
-  const link = session.link;
-  const step = (stage, frac, text) => progress({ stage, frac, text });
-  const checkAbort = () => { if (signal?.aborted) throw new Error('Cancelled.'); };
+// Small profile-owned staging files, deliberately without FileEnd (which
+// starts firmware programming). Reset receiving counters separately per file.
+export function uploadUnfinalized(session, file, options) {
+  return stageFile(session, file, options, 65536);
+}
 
-  step('clean', 0.01, 'Rebooting the unit into update mode');
+export function uploadBootstrapBinary(session, file, options) {
+  if (file.remotePath !== '/usrdata/fpvos-update' || file.bytes.length < 64
+    || ![0x7f, 0x45, 0x4c, 0x46, 2, 1].every((b, i) => file.bytes[i] === b)
+    || file.bytes[18] !== 183 || file.bytes[19] !== 0) throw new Error('Invalid AR9311 bootstrap executable/path.');
+  return stageFile(session, file, options, 2 << 20);
+}
+
+async function stageFile(session, { bytes, remotePath }, { signal, timeoutMs = 8000, chunkSize = 65536 } = {}, limit) {
+  if (!bytes.length || bytes.length > limit || !Number.isInteger(chunkSize) || chunkSize < 1) throw new Error('Invalid bounded staging payload/chunk size.');
+  const abort = () => { if (signal?.aborted) throw new Error('Cancelled.'); };
+  const checkControl = (f) => {
+    if (!f.crcOk || f.payload.length < 68 || i32(f.payload, 0) !== 0 || cstr(f.payload, 4, 64) !== 'OK') {
+      throw new Error(`Staging request rejected or damaged: ${cstr(f.payload, 4, 64) || 'invalid acknowledgment'}.`);
+    }
+  };
+  abort();
+  checkControl(await session.request(CMD.REMOTE_UPGRADE, EMPTY, { timeoutMs, retryMs: 0 }));
+  abort();
+  checkControl(await session.request(CMD.FILE_START, encodeFileStart({
+    md5hex: md5hex(bytes), length: bytes.length, remotePath,
+    localPath: `/fpvos-flasher/${remotePath.slice(remotePath.lastIndexOf('/') + 1)}`,
+  }), { timeoutMs, retryMs: 0 }));
+  await sendFileChunks(session, { bytes, chunkSize: Math.min(65536, chunkSize), timeoutMs, signal, strictCrc: true });
+}
+
+export async function rebootIntoUpdateMode(session, { mode = 'clean', stage = 'clean',
+  timeoutMs = session.settings.timeouts.updateBoot, signal, progress = () => {}, log = () => {} } = {}) {
+  const link = session.link;
+  progress({ stage, frac: 0.02, text: mode === 'normal' ? 'Rebooting into the selected clean-mode script' : 'Rebooting the unit into update mode' });
   try {
-    await session.request(CMD.REBOOT, rebootPayload('clean'), { timeoutMs: 8000, retryMs: 2000 });
-    log('unit accepted the reboot into update mode');
+    await session.request(CMD.REBOOT, rebootPayload(mode), { timeoutMs: 8000, retryMs: mode === 'normal' ? 0 : 2000 });
+    log(`unit accepted the ${mode} reboot`);
   } catch (e) {
-    // gone before its ack reached us: it is rebooting
     if (!(e instanceof LinkLostError)) throw e;
     log('unit went away before acknowledging the reboot', 'warn');
   }
-  step('clean', 0.02, 'Waiting for the unit to restart');
+  progress({ stage, frac: 0.025, text: 'Waiting for the unit to restart' });
   await withTimeout(link.closed, 30000, 'The unit did not restart.');
   session.reset();
-  step('clean', 0.03, 'Waiting for the unit to come back in update mode');
-  await link.reopen({ timeoutMs: 90000, signal });
+  progress({ stage, frac: 0.03, text: 'Waiting for the update-mode USB serial port' });
+  await link.reopen({ timeoutMs, signal });
   session.attach(link);
-  log('unit is back');
   await sleep(200);
-  checkAbort();
-
-  step('clean', 0.06, 'Starting the update');
-  await session.request(CMD.REMOTE_UPGRADE, EMPTY, { timeoutMs: 30000, retryMs: 2000 });
-
-  const total = image.bytes.length;
-  const remotePath = `/tmp/pc/${image.remoteName}`;
-  step('upload', 0.08, 'Sending the firmware');
-  log(`file ${remotePath}, ${total} bytes, md5 ${image.md5}`);
-  await session.request(CMD.FILE_START, encodeFileStart({
-    md5hex: image.md5,
-    length: total,
-    remotePath,
-    localPath: `/fpvos-flasher/${image.remoteName}`,
-  }), { timeoutMs: 8000, retryMs: 2000 });
-  await sleep(100);
-
-  const chunk = image.chunkSize ?? 1 << 20;
-  for (let off = 0; off < total; off += chunk) {
-    checkAbort();
-    const part = image.bytes.subarray(off, Math.min(off + chunk, total));
-    // Never resent: the unit appends what it gets, and a duplicate chunk
-    // would only fail the MD5 check at the end.
-    const f = await session.request(CMD.FILE_DATA, part, { timeoutMs: dataTimeoutMs, retryMs: 0 });
-    const ack = parseFileAck(f.payload);
-    const sent = off + part.length;
-    log(`chunk ${off / chunk + 1}: unit has ${ack.cursize}/${ack.totalsize}, status ${ack.status} ${ack.detail}`, 'debug');
-    step('upload', 0.08 + 0.72 * (sent / total), `Sending the firmware (${Math.round((100 * sent) / total)}%)`);
-  }
-
-  step('upload', 0.8, 'Unit is checking the file');
-  const end = parseFileAck((await session.request(CMD.FILE_END, EMPTY, { timeoutMs: 30000, retryMs: 5000 })).payload);
-  log(`file end: status ${end.status}, "${end.detail}"`);
-  if (end.status !== 0 || end.detail !== 'OK') {
-    throw new Error(`The unit rejected the file: ${end.detail || `status ${end.status}`}`);
-  }
-
-  // From here on the unit writes flash on its own; leaving now is not harmful
-  // but the result would be unknown.
-  step('install', 0.82, 'Writing the firmware to flash');
-  const started = Date.now();
-  let last = '';
-  let percent = -1;
-  for (;;) {
-    let s;
-    try {
-      await sleep(500);
-      s = parseUpgradeStatus((await session.request(CMD.UPGRADE_STATUS, EMPTY, { timeoutMs: 8000, retryMs: 2000 })).payload);
-    } catch (e) {
-      if (e instanceof LinkLostError && percent >= 90) {
-        log(`unit restarted at ${percent}%`, 'warn');
-        break;
-      }
-      throw e;
-    }
-    const now = `${s.percent}% status ${s.status} ${s.detail}`;
-    if (now !== last) { log(`install: ${now}`); last = now; }
-    percent = s.percent;
-    if (s.percent > 99) break;
-    if (/fail|error|err\b/i.test(s.detail)) throw new Error(`The unit reports: ${s.detail}`);
-    if (Date.now() - started > 10 * 60 * 1000) throw new TimeoutError('The install did not finish within 10 minutes.');
-    step('install', 0.82 + 0.16 * Math.max(0, Math.min(99, s.percent)) / 100,
-      `Writing the firmware to flash (${Math.max(0, s.percent)}%)`);
-  }
-
-  step('restart', 0.98, 'Unit is restarting');
-  let after = null;
-  try {
-    await withTimeout(link.closed, 30000, 'The unit did not restart after the update.');
-    session.reset();
-    await link.reopen({ timeoutMs: 120000, signal, quiet: true });
-    session.attach(link);
-    await sleep(500);
-    after = await session.deviceInfo({ timeoutMs: 15000 });
-    log(`unit reports firmware "${after.firmware}"`);
-  } catch (e) {
-    log(`could not read the unit after the update: ${e.message}`, 'warn');
-  }
-  step('done', 1, 'Done');
-  return after;
+  if (signal?.aborted) throw new Error('Cancelled.');
+  return await session.deviceInfo({ timeoutMs: 15000 });
 }

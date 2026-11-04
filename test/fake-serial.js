@@ -1,4 +1,4 @@
-// A fake navigator.serial with a simulated air unit behind it, injected into
+// A fake navigator.serial with a simulated Ascent device behind it, injected into
 // the page by browser-check.mjs before app.js runs. It mimics how Chrome
 // behaves: a reboot errors the readable stream, fires "disconnect", and the
 // unit comes back as a new SerialPort with a "connect" event.
@@ -7,10 +7,22 @@
 // getPorts(), as when Chrome does not keep the permission.
 
 (() => {
-  const VID = 0x1d76;
+  const params = new URLSearchParams(location.search);
+  const readyAt = Date.now() + Number(params.get('startupDelay') ?? 0);
+  const type = params.get('device') ?? 'air';
+  const rejectData = params.has('rejectData');
+  const installFailure = params.has('installFailure');
+  const VID = type === 'air' ? 0x1d76 : 0x1d75;
+  let custom = type === 'fpvos' || type === 'p1';
+  const name = type === 'air' ? 'Ascent_H_Sky' : type === 'vrx' ? 'Ascent_VRX' : 'Ascent_VRX_Pro';
+  const factory = { name, serial: 'FAKE0001', hardware: type === 'air' ? 'FPV-Ascent-Sky-482-V1.3-1.0'
+    : type === 'vrx' ? 'FPV-Ascent-Gnd-485-V1.2-1.0' : 'HW_V1.0' };
+  let firmware = `${type === 'air' ? 'Ascent_H_Sky' : 'Ascent_G_Gnd'}_${params.get('fw') ?? (type === 'air' ? '18_21_10' : '17_5_3')}`;
+  const staged = new Map();
   const fake = window.__fake = Object.assign({ regrant: true, bootMs: 600, log: [] }, window.__fake || {});
+  fake.starts = []; fake.rebootPayloads = [];
   const serial = new EventTarget();
-  let A = null;   // ascent.js, loaded on first use
+  let A = null;   // protocol module, loaded on first use
   let granted = [];
   let device = null;
 
@@ -23,12 +35,12 @@
   class FakePort extends EventTarget {
     constructor(dev) { super(); this.dev = dev; this.readable = null; this.writable = null; }
 
-    getInfo() { return { usbVendorId: VID, usbProductId: 0x0101 }; }
+    getInfo() { return this.dev.custom ? { usbVendorId: 0x1d6b, usbProductId: 0x0104 } : { usbVendorId: VID, usbProductId: 0x0101 }; }
 
     async open() {
       if (!this.dev.present || this.dev.port !== this) throw new DOMException('Failed to open serial port.', 'NetworkError');
       if (this.readable) throw new DOMException('The port is already open.', 'InvalidStateError');
-      A = A || await import('/ascent.js');
+      A = A || await import('/transports/ascent.js');
       this.readable = new ReadableStream({ start: (c) => { this.ctrl = c; } });
       this.writable = new WritableStream({
         write: (chunk) => {
@@ -53,6 +65,7 @@
   class FakeUnit {
     constructor(mode) {
       this.mode = mode;
+      this.custom = custom;
       this.present = true;
       this.port = new FakePort(this);
       this.parser = null;
@@ -82,23 +95,62 @@
     handle(f) {
       const C = A.CMD;
       if (f.cmd === C.FIND_DEVICE) {
+        if (Date.now() < readyAt) return;
+        if (this.custom) return this.send(f, this.struct(300, (i32, str) => {
+          i32(0, 1 << 20); str(4, 'development'); str(36, 'fpvOS updater');
+          str(104, /^[a-f0-9]{64}$/.test(firmware) ? firmware : 'fpvOS unsigned development updates');
+          str(168, type === 'p1' ? 'fpvos-p1-air' : 'fpvos-ar9311'); str(200, type === 'p1' ? 'P1_SKY' : 'Gnd485'); str(236, this.mode === 'clean' ? 'clean RAM mode' : 'normal mode');
+        }));
+        const current = this.mode === 'unlocked' && !params.has('unlockFails') ? 'Ascent_G_Gnd_0_0_0' : firmware;
+        const airClean = type === 'air' && this.mode === 'clean';
         return this.send(f, this.struct(300, (i32, str) => {
-          i32(0, 1 << 20); str(4, 'v1.0'); str(36, 'Ascent_H_Sky'); i32(100, 51);
-          str(104, 'Ascent_H_Sky_18_21_10'); str(168, 'FAKE0001'); str(200, 'HW_V1.0');
+          i32(0, 1 << 20); str(4, airClean ? '' : current.split('_').slice(-3).join('.')); str(36, airClean ? 'Ascent' : factory.name); i32(100, airClean ? 0 : 51);
+          str(104, current); str(168, airClean || type === 'vrx' && this.mode !== 'normal' ? '' : factory.serial);
+          str(200, airClean ? 'FPV-Edu-Sky-V0.0-0.0' : type === 'vrx' && this.mode !== 'normal' ? 'FPV-Ascent-Gnd-485-V0.0-0.0' : factory.hardware);
+          str(236, 'OK');
         }));
       }
-      if (f.cmd === C.REBOOT) { this.send(f); return reboot(new TextDecoder().decode(f.payload).startsWith('clean') ? 'clean' : 'normal'); }
-      if (f.cmd === C.REMOTE_UPGRADE) return this.mode === 'clean' ? this.send(f) : undefined;
+      if (f.cmd === C.REBOOT) {
+        const request = new TextDecoder().decode(f.payload).replace(/\0.*$/s, '');
+        this.send(f, this.custom ? this.struct(68, (i32, str) => { i32(0,0); str(4, type === 'p1' && request === 'clean' ? 'rebooting into clean RAM mode' : 'OK'); }) : undefined);
+        fake.rebootPayloads.push(request);
+        if (this.custom && request === 'clean') { if (type === 'p1') return reboot('clean'); this.mode = 'clean'; return; }
+        let mode = request === 'clean' ? 'clean' : 'normal';
+        if (request === 'normal' && staged.has('/factory/sirius-clean-system-flag')) {
+          const flag = new TextDecoder().decode(staged.get('/factory/sirius-clean-system-flag'));
+          const scriptPath = /^web:(\/usrdata\/fpvos-unlock-[a-f0-9]{32}\.sh)\n$/.exec(flag)?.[1];
+          if (flag === 'web:/usrdata/fpvos-bootstrap.sh\n' && staged.has('/usrdata/fpvos-update') && staged.has('/usrdata/fpvos-bootstrap.sh')) {
+            custom = true; mode = 'clean'; fake.bootstrap = true;
+            staged.delete('/usrdata/fpvos-update'); staged.delete('/usrdata/fpvos-bootstrap.sh');
+          } else mode = scriptPath && staged.has(scriptPath) ? 'unlocked' : 'clean';
+          staged.delete('/factory/sirius-clean-system-flag'); staged.delete(scriptPath);
+        }
+        return reboot(mode);
+      }
+      if (f.cmd === C.REMOTE_UPGRADE) {
+        this.file = null;
+        return this.send(f, this.struct(68, (i32, str) => { i32(0, 0); str(4, 'OK'); }));
+      }
       if (f.cmd === C.FILE_START) {
         const v = new DataView(f.payload.buffer, f.payload.byteOffset);
         this.file = { md5: new TextDecoder().decode(f.payload.subarray(0, 32)), length: v.getInt32(64, true), parts: [], got: 0 };
         fake.remotePath = new TextDecoder().decode(f.payload.subarray(72, 200)).replace(/\0.*$/s, '');
-        return this.send(f);
+        this.file.path = fake.remotePath;
+        fake.starts.push(fake.remotePath);
+        return this.send(f, this.struct(68, (i32, str) => { i32(0, 0); str(4, 'OK'); }));
       }
       if (f.cmd === C.FILE_DATA) {
         this.file.parts.push(f.payload);
         this.file.got += f.payload.length;
-        return this.send(f, this.struct(80, (i32, str) => { i32(0, f.payload.length); i32(4, this.file.got); i32(8, this.file.length); i32(12, 0); str(16, 'OK'); }));
+        if (!this.file.path.endsWith('.img')) {
+          const all = new Uint8Array(this.file.got); let offset = 0;
+          for (const p of this.file.parts) { all.set(p, offset); offset += p.length; }
+          staged.set(this.file.path, all);
+        }
+        return this.send(f, this.struct(80, (i32, str) => {
+          i32(0, type === 'air' ? 0 : f.payload.length); i32(4, this.file.got); i32(8, this.file.length);
+          i32(12, rejectData ? -1 : 0); str(16, rejectData ? 'write failed' : 'OK');
+        }));
       }
       if (f.cmd === C.FILE_END) {
         const all = new Uint8Array(this.file.got);
@@ -106,12 +158,38 @@
         for (const p of this.file.parts) { all.set(p, o); o += p.length; }
         const ok = A.md5hex(all) === this.file.md5;
         fake.md5ok = ok;
+        if (this.custom) {
+          crypto.subtle.digest('SHA-256', all).then((digest) => {
+            this.nextFirmware = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2,'0')).join('');
+            this.send(f, this.struct(80, (i32, str) => {
+              i32(4,this.file.got); i32(8,this.file.length); i32(12,ok?0:-1); str(16,ok?'transfer verified; query status':'md5 fail');
+            }));
+          });
+          return;
+        }
+        this.nextFirmware = this.file.path.slice(this.file.path.lastIndexOf('/') + 1).replace(/\.img$/, '');
+        if (params.has('enforceRollback') && this.mode !== 'unlocked') {
+          const have = firmware.split('_').slice(-3).map(Number), want = this.nextFirmware.split('_').slice(-3).map(Number);
+          for (let i = 0; i < 3; i++) if (want[i] !== have[i]) { this.rollbackRejected = want[i] < have[i]; break; }
+        }
         return this.send(f, this.struct(80, (i32, str) => { i32(12, ok ? 0 : -1); str(16, ok ? 'OK' : 'md5 fail'); }));
       }
       if (f.cmd === C.UPGRADE_STATUS) {
+        const failed = installFailure || this.rollbackRejected;
         this.status = Math.min(100, this.status + 25);
-        this.send(f, this.struct(72, (i32, str) => { i32(0, this.status); str(8, 'WRITING'); }));
-        if (this.status >= 100) setTimeout(() => reboot('normal'), 50);
+        this.send(f, this.struct(72, (i32, str) => {
+          i32(0, failed ? 0 : this.status); i32(4, failed ? -6 : this.custom ? this.status === 100 ? 4 : 3 : 0);
+          if (!failed) str(8, 'WRITING');
+        }));
+        if (!failed && this.status >= 100) {
+          firmware = this.nextFirmware;
+          if (type === 'air') {
+            const lite = firmware === 'Ascent_H_Sky_18_21_10';
+            Object.assign(factory, { name: lite ? 'Ascent_lite' : 'Ascent_H_Sky', serial: lite ? '1_FAKE0001' : 'FAKE0001',
+              hardware: `FPV-Ascent-Sky-482-V1.3-${lite ? '1.1' : '1.0'}` });
+          }
+          if (!this.custom) setTimeout(() => reboot('normal'), 50);
+        }
         return undefined;
       }
       return this.send({ ...f, cmd: C.UNKNOWN });

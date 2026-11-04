@@ -114,6 +114,10 @@
   #file-status { margin-top: 6px; color: var(--data); font-size: 13px; letter-spacing: 0.08em; }
   #drop .formats { display: block; margin-top: 4px; font-size: 12.5px; color: color-mix(in srgb, var(--quiet) 75%, transparent); }
   #drop.loaded .formats { display: none; }
+  .profile-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+  .profile-row label { color: var(--quiet); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; }
+  select { max-width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--sunk); color: var(--text); font: inherit; }
+  #profile-hint { margin-top: 8px; color: var(--quiet); font-size: 13px; }
 
   table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
@@ -131,6 +135,9 @@
   #checks li[data-level="error"] { border-color: var(--error); background: color-mix(in srgb, var(--error) 12%, transparent); color: color-mix(in srgb, var(--error) 70%, var(--text)); }
 
   .flash-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+  #unlock-options { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+  #unlock-options label { display: flex; align-items: center; gap: 8px; color: var(--accent); }
+  #unlock-hint { margin-top: 6px; color: var(--quiet); font-size: 13px; }
   #flash { padding: 11px 28px; font-size: 14px; }
   #hint { color: var(--quiet); }
 
@@ -249,16 +256,44 @@
     </div>
     <div id="unit-status" data-kind="idle"><span>Not connected</span></div>
     <dl id="unit-info" hidden></dl>
+    <details id="p1-preparation">
+      <summary>Installing fpvOS on a stock BETAFPV P1?</summary>
+      <p>Let the stock P1 finish starting after power-on. Prepare it directly in this browser, then install your P1 <code>.fwu</code>
+        firmware. Keep external power connected and disconnect other Artosyn devices.</p>
+      <p>The same P1 appears as a serial port, a USB bootloader, then a recovery serial
+        port. Your browser asks for permission for each USB mode.</p>
+      <p><label><input id="p1-stock-confirm" type="checkbox">
+        This is a standard P1 Air with stock firmware 1.0.44. Other stock versions
+        and P1 AIO models are not supported.</label></p>
+      <p><button id="p1-enter-bootloader">1. Restart stock P1</button>
+        Select its Sirius serial port.</p>
+      <p><button id="p1-load-recovery">2. Load P1 recovery</button>
+        Select the same P1, now called USB download gadget. If it is already in this
+        mode, start here.</p>
+      <p id="p1-browser-support" hidden>Stock preparation requires desktop Chrome or Edge
+        with Web Serial and WebHID.</p>
+      <p id="p1-preparation-status" role="status" aria-live="polite">After recovery starts,
+        click Connect above, select the P1 Air serial port, choose your firmware below and click Flash.</p>
+      <button id="p1-preparation-cancel" hidden>Cancel preparation</button>
+      <p>Preparation runs in RAM; it does not replace the bootloader. Tested on Linux Chromium;
+        Windows and macOS are not yet verified. Linux may need USB/HID permissions:
+        <a href="assets/p1-updater/README.txt" target="_blank" rel="noopener">setup and recovery guide</a>.</p>
+    </details>
   </section>
 
   <section class="panel">
     <div class="panel-head">
       <h2><span class="n">02</span>Firmware</h2>
     </div>
+    <div class="profile-row">
+      <label for="profile">Hardware profile</label>
+      <select id="profile"><option value="">Auto · connected device</option></select>
+    </div>
+    <div id="profile-hint"></div>
     <label id="drop">
-      <input id="file" type="file" accept=".img,.zip,.xz,.gz,.tgz,.txz,.tar">
+      <input id="file" type="file" accept=".img,.fwu,.zip,.xz,.gz,.tgz,.txz,.tar">
       Drop a firmware image or an archive here, or <strong>choose a file</strong>
-      <span class="formats">.img, or a .zip, .xz, .gz or .tar holding one</span>
+      <span class="formats">.img, .fwu, or a .zip, .xz, .gz or .tar holding one</span>
     </label>
     <div id="file-info" hidden>
       <div id="file-name"></div>
@@ -276,6 +311,10 @@
     <div class="panel-head">
       <h2><span class="n">03</span>Flash</h2>
     </div>
+    <div id="unlock-options" hidden>
+      <label><input id="unlock-before-flash" type="checkbox"><span id="unlock-label"></span></label>
+      <div id="unlock-hint"></div>
+    </div>
     <div class="flash-row">
       <button id="flash" class="solid" disabled>Flash</button>
       <button id="cancel" hidden>Cancel</button>
@@ -285,6 +324,7 @@
       <div class="track"><div id="bar"></div></div>
       <div id="stage-text"></div>
       <ol id="stages">
+        <li id="stage-unlock" hidden>Unlock VRX</li>
         <li>Update mode</li>
         <li>Send file</li>
         <li>Write flash</li>
@@ -312,17 +352,26 @@
       <summary>How it works</summary>
       <p>The page talks to the updater that already runs on the device, the same one the vendor's
         PC tool talks to, and checks the image before anything is sent.</p>
-      <p><b>Ascent air unit:</b> the unit reboots into its update system, receives the file, checks
-        its MD5, writes its other flash bank and switches to it. A failed or interrupted transfer
-        leaves the running bank as it was. Power it from the battery or the USB port.</p>
+      <p><b>Ascent Lite/Lite+:</b> the unit reboots into its update system, checks the transfer MD5
+        and image CRC, and updates banked components. Boot and environment can be written in place;
+        this is not a whole-system atomic update.</p>
+      <p><b>Standard Ascent VRX:</b> use external DC power and USB. The page checks the signed
+        OTRA container, SHA-256 and the standard VRX RSA key. The receiver applies its own
+        authentication and hardware checks, then writes both single and paired NAND partitions.
+        Persistent application changes may be replaced. VRX Pro and Avatar images need different profiles.</p>
+      <p><b>BETAFPV P1 Air · Stock / fpvOS:</b> select a full P1 <code>.fwu</code> bundle.
+        The unit enters clean recovery, installs and verifies the image, then reboots.
+        Keep external power connected. For initial installation from stock 1.0.44,
+        use the browser preparation controls in the Device panel first. Stock images and VRX bundles
+        are not supported by this profile.</p>
       <p>Close the vendor's PC tool and any serial terminal first: only one program can use the port.</p>
       <p>On Linux your user needs access to <code>/dev/ttyACM*</code> (the <code>dialout</code> group),
         and ModemManager, if it runs, can grab a new serial port for a few seconds.</p>
     </details>
     <details>
       <summary>Advanced</summary>
-      <p><b>Ascent air unit:</b> switch its USB from serial to network (RNDIS) mode. It stays in
-        network mode until it reboots.</p>
+      <p>Ask the connected Ascent updater to enable USB network (RNDIS) mode. The standard VRX
+        already exposes networking alongside serial. An air unit leaves serial mode until it reboots.</p>
       <button id="netmode" disabled>Switch to network mode</button>
     </details>
   </section>

@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "version": "v1",
+  "board": "ar9311",
+  "board_id": 485,
+  "source": "https://github.com/mh1412/fpvOS",
+  "source_commit": "b7dd21dc25ea6b150c89a544e32656d8acd7982c",
+  "supported_stock_firmware": ["17.5.3", "17.5.8", "18.21.10"],
+  "files": {
+    "fpvos-update-ar9311": {
+      "size": 1082952,
+      "sha256": "1dea144e409dbc6ea2c53e86202b5e520c2cbc7c4c87989cca56931aded34511"
+    },
+    "bootstrap.sh": {
+      "size": 433,
+      "sha256": "0708e0f82156103abbed53739c290ed9c196754d5fa53de19dfd3bad68941c5e"
+    }
+  }
+}

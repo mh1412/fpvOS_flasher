@@ -1,145 +1,89 @@
 #!/usr/bin/env node
 // Runs the page in headless Chrome against fake-serial.js and flashes an
-// image through the real UI, twice: once with the port permission kept across
-// reboots, once with it lost (the "Select the unit again" path).
-//   node test/browser-check.mjs IMG [OUTDIR]
-// Needs google-chrome. Screenshots go to OUTDIR (default: a temp dir).
+// image through the real UI: bare image, archive and reselect paths, plus
+// profile mismatch / unsupported device checks. No physical USB access.
+//   node test/browser-check.mjs [IMG] [OUTDIR]
+// CHROME=/path/to/chromium selects a browser; VRX_IMG adds signed stock VRX flows.
+// Defaults to a synthetic air image. Screenshots go to OUTDIR (a temp dir by default).
 
-import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { airImage, vrxImage, storedZip } from './fixtures.mjs';
+import { openBrowser, PUBLIC_ASSETS } from './browser-harness.mjs';
+import { crc32 } from '../checksum.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const img = path.resolve(process.argv[2] ?? '');
 const out = process.argv[3] ?? fs.mkdtempSync(path.join(os.tmpdir(), 'flasher-check-'));
-if (!fs.existsSync(img)) { console.error('usage: browser-check.mjs IMG [OUTDIR]'); process.exit(2); }
 fs.mkdirSync(out, { recursive: true });
+const img = process.argv[2] ? path.resolve(process.argv[2]) : path.join(out, 'Ascent_H_Sky_18_21_10.img');
+if (!process.argv[2]) fs.writeFileSync(img, airImage());
+if (!fs.existsSync(img)) { console.error('usage: browser-check.mjs [IMG] [OUTDIR]'); process.exit(2); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ------------------------------------------------------------ static server --
-const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript' };
-const server = http.createServer((req, res) => {
-  const p = path.join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname));
-  const f = p.endsWith('/') ? path.join(p, 'index.html') : p;
-  if (!f.startsWith(root) || !fs.existsSync(f)) { res.writeHead(404).end(); return; }
-  res.writeHead(200, { 'content-type': types[path.extname(f)] ?? 'application/octet-stream' });
-  fs.createReadStream(f).pipe(res);
-});
-await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const base = `http://127.0.0.1:${server.address().port}/`;
-
-// ------------------------------------------------------------------ chrome --
-const debugPort = 9300 + Math.floor(Math.random() * 500);
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'flasher-chrome-'));
-const chrome = spawn('google-chrome', [
-  '--headless=new', `--remote-debugging-port=${debugPort}`, `--user-data-dir=${profile}`,
-  '--no-first-run', '--no-default-browser-check', '--window-size=1000,1400', 'about:blank',
-], { stdio: 'ignore' });
-
-let targets;
-for (let i = 0; i < 50 && !targets; i++) {
-  await sleep(200);
-  try { targets = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json(); } catch { /* starting */ }
-}
-const ws = new WebSocket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl);
-await new Promise((r) => { ws.onopen = r; });
-let nextId = 0;
-const pending = new Map();
-const problems = [];
-ws.onmessage = (m) => {
-  const d = JSON.parse(m.data);
-  if (d.id) {
-    const p = pending.get(d.id);
-    pending.delete(d.id);
-    if (d.error) p.rej(new Error(`${d.error.message}`)); else p.res(d.result);
-  } else if (d.method === 'Runtime.exceptionThrown') {
-    problems.push(`exception: ${d.params.exceptionDetails.exception?.description ?? d.params.exceptionDetails.text}`);
-  } else if (d.method === 'Runtime.consoleAPICalled' && d.params.type === 'error') {
-    problems.push(`console.error: ${d.params.args.map((a) => a.value ?? a.description).join(' ')}`);
-  }
-};
-const cdp = (method, params = {}) => new Promise((res, rej) => {
-  const id = ++nextId;
-  pending.set(id, { res, rej });
-  ws.send(JSON.stringify({ id, method, params }));
-});
-const js = async (expr) => {
-  const r = await cdp('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
-  if (r.exceptionDetails) throw new Error(`${expr}: ${r.exceptionDetails.exception?.description}`);
-  return r.result.value;
-};
-// Polls through errors: right after Page.navigate the old document (still
-// "complete", without our elements) can answer first.
-async function until(expr, ms, what) {
-  const end = Date.now() + ms;
-  let last = null;
-  while (Date.now() < end) {
-    try {
-      if (await js(expr)) return;
-    } catch (e) {
-      last = e;
-    }
-    await sleep(100);
-  }
-  throw new Error(`timed out waiting for ${what ?? expr}${last ? ` (${last.message})` : ''}`);
-}
-async function shot(name) {
-  const { cssContentSize: s } = await cdp('Page.getLayoutMetrics');
-  const { data } = await cdp('Page.captureScreenshot', {
-    format: 'png', captureBeyondViewport: true,
-    clip: { x: 0, y: 0, width: Math.ceil(s.width), height: Math.ceil(s.height), scale: 1 },
-  });
-  fs.writeFileSync(path.join(out, `${name}.png`), Buffer.from(data, 'base64'));
-}
-async function chooseFile(file) {
-  const { root: doc } = await cdp('DOM.getDocument');
-  const { nodeId } = await cdp('DOM.querySelector', { nodeId: doc.nodeId, selector: '#file' });
-  await cdp('DOM.setFileInputFiles', { nodeId, files: [file] });
-}
-
-await cdp('Page.enable');
-await cdp('Runtime.enable');
-await cdp('DOM.enable');
 const fake = fs.readFileSync(path.join(root, 'test/fake-serial.js'), 'utf8');
-await cdp('Page.addScriptToEvaluateOnNewDocument', {
-  source: `window.__fake = { regrant: !location.search.includes('regrant=0') };\n${fake}`,
-});
 
-async function scenario(name, query, { reselect, file = img }) {
-  console.log(`--- ${name}`);
+async function connectedPage(query = '') {
   await cdp('Page.navigate', { url: `${base}${query}` });
-  await until("document.readyState === 'complete'", 10000);
-  await until("document.querySelector('#unit-status').dataset.kind === 'ok'", 10000, 'auto-connect');
-  console.log(`connected: ${await js("document.querySelector('#unit-info').innerText.replace(/\\n/g, ' | ')")}`);
+  await until("document.readyState === 'complete' && document.querySelector('#unit-info') && !document.querySelector('#unit-info').hidden", 10000, 'auto-connect');
+}
+
+async function p1PreparationControls() {
+  console.log('--- P1 preparation permissions and cancellation');
+  await connectedPage('?device=p1');
+  await js("document.querySelector('#disconnect').click()");
+  await until("!document.querySelector('#connect').hidden", 5000);
+  if (!await js("document.querySelector('#p1-load-recovery').disabled")) throw new Error('Stock version confirmation is required.');
+  await js("document.querySelector('#p1-stock-confirm').click()");
+  await until("!document.querySelector('#p1-load-recovery').disabled", 3000);
+  await js(`navigator.hid.requestDevice = () => new Promise(resolve => { window.resolveP1Chooser = resolve; });
+    document.querySelector('#p1-load-recovery').click();`);
+  if (!await js("document.querySelector('#connect').disabled && document.querySelector('#p1-enter-bootloader').disabled && !document.querySelector('#p1-preparation-cancel').hidden && document.querySelector('#flash').textContent === 'Flash'")) throw new Error('Preparation must lock competing actions without claiming a firmware flash.');
+  await js("document.querySelector('#p1-preparation-cancel').click(); window.resolveP1Chooser([])");
+  await until("!document.querySelector('#p1-load-recovery').disabled && document.querySelector('#p1-preparation-cancel').hidden", 3000);
+  if (!await js("document.querySelector('#p1-preparation-status').textContent.includes('No bootloader selected')")) throw new Error('Empty chooser must leave a retryable status.');
+}
+
+async function scenario(name, query, { reselect, file = img, source = img, profile = 'ascent-air', unlock = false, bootstrap = false }) {
+  console.log(`--- ${name}`);
+  await connectedPage(query);
+  if (profile === 'fpvos-p1-air') {
+    if (!await js("document.querySelector('#p1-enter-bootloader') && document.querySelector('#p1-load-recovery') && !document.querySelector('#p1-preparation-download')")) throw new Error('P1 browser preparation controls are missing.');
+    if (!await js("document.querySelector('#p1-enter-bootloader').disabled && document.querySelector('#p1-load-recovery').disabled")) throw new Error('Stock preparation must be disabled while connected.');
+  }
   await chooseFile(file);
   await until("!document.querySelector('#file-info').hidden && /[0-9a-f]{32}/.test(document.querySelector('#file-meta').innerText)", 30000, 'image parsed');
-  const shown = await js("document.querySelector('#file-meta').innerText.match(/[0-9a-f]{32}/)[0]");
-  if (shown !== imgMd5) throw new Error(`${name}: page shows md5 ${shown}, image is ${imgMd5}`);
-  console.log(`file: ${await js("document.querySelector('#file-name').textContent + ' | ' + document.querySelector('#file-meta').innerText.split('\\n').slice(0, 2).join(' ')")}`);
+  const shown = await js("[...document.querySelectorAll('#file-meta dt')].find(e => e.textContent === 'MD5').nextElementSibling.textContent");
+  const expectedMd5 = createHash('md5').update(fs.readFileSync(source)).digest('hex');
+  if (shown !== expectedMd5) throw new Error(`${name}: page shows md5 ${shown}, image is ${expectedMd5}`);
+  if (!await js(`document.querySelector('#profile-hint').textContent.includes(${JSON.stringify(profile === 'ascent-vrx' ? 'Ascent VRX · Stock' : profile === 'fpvos-ar9311' ? 'Ascent VRX · fpvOS' : profile === 'fpvos-p1-air' ? 'BETAFPV P1 Air · fpvOS' : 'Ascent Lite')})`)) {
+    throw new Error(`${name}: wrong detected hardware profile`);
+  }
   await until("!document.querySelector('#flash').disabled", 5000, 'flash enabled');
-  console.log(`checks: ${await js("[...document.querySelectorAll('#checks li')].map(l => l.dataset.level + ': ' + l.textContent).join(' / ')")}`);
+  if (unlock) {
+    if (await js("document.querySelector('#unlock-before-flash').disabled")) throw new Error('unlock unavailable');
+    if (!await js("document.querySelector('#unlock-before-flash').checked")) throw new Error('downgrade did not auto-select unlock');
+  }
   await shot(`${name}-ready`);
   await js("document.querySelector('#flash').click()");
   await until("document.querySelector('#ask').open", 3000, 'confirm dialog');
+  const notice = await js("document.querySelector('#ask-text').textContent");
+  if (profile === 'ascent-vrx' && !/external DC power/.test(notice)) throw new Error('VRX confirmation lacks its power/update policy');
+  if (unlock && !/0\.0\.0/.test(notice)) throw new Error('unlock confirmation lacks the version overlay policy');
+  if (bootstrap && !/RAM updater/.test(notice)) throw new Error('bootstrap confirmation lacks its experimental preparation policy');
   await shot(`${name}-confirm`);
   await js("document.querySelector('#ask-ok').click()");
   let reselects = 0;
   const t0 = Date.now();
-  let midShot = false;
   while (await js("document.querySelector('#result').hidden")) {
     if (Date.now() - t0 > 120000) throw new Error('flash did not finish');
     if (reselect && !(await js("document.querySelector('#reselect').hidden"))) {
       if (reselects === 0) await shot(`${name}-reselect`);
       await js("document.querySelector('#reselect').click()");
       reselects++;
-    }
-    if (!midShot && await js("/Sending/.test(document.querySelector('#stage-text').textContent)")) {
-      await shot(`${name}-sending`);
-      midShot = true;
     }
     await sleep(200);
   }
@@ -153,42 +97,138 @@ async function scenario(name, query, { reselect, file = img }) {
     mode: window.__fake.mode,
     requested: window.__fake.requested || 0,
     cmds: window.__fake.log.filter(l => !/FILE_DATA|UPGRADE_STATUS/.test(l)),
+    starts: window.__fake.starts, reboots: window.__fake.rebootPayloads,
   })`);
-  console.log(JSON.stringify({ ...r, reselects, seconds: Math.round((Date.now() - t0) / 1000) }, null, 1));
+  console.log(`${r.result} (${reselects} port reselections)`);
   const fail = [];
   if (r.ok !== 'true') fail.push(`result: ${r.result}`);
   if (!r.md5ok) fail.push('unit md5 check failed');
   if (r.mode !== 'normal') fail.push(`unit ends in ${r.mode} mode`);
-  if (reselect && r.requested < 2) fail.push(`expected 2 reselects, got ${r.requested}`);
+  if (reselect && r.requested < (bootstrap ? 1 : 2)) fail.push(`missing port reselection (${r.requested})`);
   if (!reselect && r.requested) fail.push('asked for the port without need');
+  const expectedName = profile === 'fpvos-p1-air' ? 'fpvos.fwu' : path.basename(source);
+  if (r.remotePath !== `/tmp/pc/${expectedName}`) fail.push(`wrong remote filename: ${r.remotePath}`);
+  if (unlock && (r.starts.length !== 3 || r.reboots[0] !== 'normal' || r.cmds.filter(c => /FILE_END/.test(c)).length !== 1)) fail.push('unlock staging/reboot/update trigger order was wrong');
+  if (bootstrap && (r.starts.length !== 4 || r.starts[0] !== '/usrdata/fpvos-update' || r.starts[1] !== '/usrdata/fpvos-bootstrap.sh'
+    || r.reboots[0] !== 'normal' || r.cmds.filter(c => /FILE_END/.test(c)).length !== 1)) fail.push('bootstrap staging/reboot/update trigger order was wrong');
   return fail;
 }
 
 async function looks() {
-  console.log('--- looks: dark, phone width, a goggles image');
+  console.log('--- looks: dark, phone width, an unsupported L_Gnd image');
   await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 900, deviceScaleFactor: 1, mobile: true });
-  await cdp('Page.navigate', { url: base });
-  await until("document.querySelector('#unit-status').dataset.kind === 'ok'", 10000, 'auto-connect');
-  const bad = path.join(out, 'Ascent_G_Gnd_17_5_8.img');
-  const b = Buffer.alloc(4096);
-  b.write('ASW\0');
-  b.writeUInt32LE(5, 4);
-  b.writeUInt32LE(17, 8); b.writeUInt32LE(5, 12); b.writeUInt32LE(8, 16);
-  fs.writeFileSync(bad, b);
+  await connectedPage();
+  const bad = path.join(out, 'Ascent_L_Gnd_17_5_8.img');
+  fs.writeFileSync(bad, airImage([17, 5, 8], 1));
   await chooseFile(bad);
   await until("document.querySelectorAll('#checks li[data-level=error]').length > 0", 5000, 'error shown');
   const disabled = await js("document.querySelector('#flash').disabled");
   const overflow = await js('document.documentElement.scrollWidth > window.innerWidth');
   await shot('looks-dark-phone-bad-image');
   const fail = [];
-  if (!disabled) fail.push('flash enabled for a goggles image');
+  if (!disabled) fail.push('flash enabled for an unsupported ground image');
   if (overflow) fail.push('horizontal scroll at 390 px');
   return fail;
 }
 
+async function rejectedProfile(name, query, file, selected = '') {
+  console.log(`--- ${name}`);
+  await connectedPage(query);
+  if (selected) await js(`document.querySelector('#profile').value = ${JSON.stringify(selected)}; document.querySelector('#profile').dispatchEvent(new Event('change'))`);
+  await chooseFile(file);
+  await until("document.querySelectorAll('#checks li[data-level=error]').length > 0", 10000, 'profile mismatch');
+  await shot(name);
+  const disabled = await js("document.querySelector('#flash').disabled");
+  const commands = await js('window.__fake.log');
+  return disabled && commands.every((c) => /FIND_DEVICE/.test(c)) ? [] : [`${name}: mismatch allowed a flash`];
+}
+
+async function offlineProfiles(bundle) {
+  console.log('--- offline archive profile selection');
+  await connectedPage();
+  await js("document.querySelector('#disconnect').click()");
+  await until("document.querySelector('#unit-status').dataset.kind === 'idle'", 5000);
+  await chooseFile(bundle);
+  await until("document.querySelector('#checks').textContent.includes('different hardware')", 10000, 'ambiguous bundle rejected');
+  await js("document.querySelector('#profile').value = 'ascent-air'; document.querySelector('#profile').dispatchEvent(new Event('change'))");
+  await until("document.querySelector('#file-name').textContent.startsWith('Ascent_H_Sky') && /MD5/.test(document.querySelector('#file-meta').textContent)", 10000, 'offline air selection');
+  if (!await js("document.querySelector('#flash').disabled")) return ['flash enabled while disconnected'];
+  await shot('offline-profile');
+  return [];
+}
+
+async function failedTransfer(install = false) {
+  console.log(install ? '--- negative install status with empty detail fails immediately' : '--- failed chunk releases the device');
+  await connectedPage(`?${install ? 'installFailure' : 'rejectData'}=1`);
+  await chooseFile(img);
+  await until("!document.querySelector('#flash').disabled", 10000);
+  await js("document.querySelector('#flash').click()");
+  await until("document.querySelector('#ask').open", 3000);
+  await js("document.querySelector('#ask-ok').click()");
+  await until("!document.querySelector('#result').hidden", 10000);
+  const ok = await js(`document.querySelector('#result').dataset.ok === 'false'
+    && document.querySelector('#result').textContent.includes(${JSON.stringify(install ? 'update failure (status -6)' : 'rejected or miscounted chunk')})
+    && document.querySelector('#unit-status').dataset.kind === 'idle'
+    && document.querySelector('#flash').disabled
+    && ${install ? "window.__fake.log.filter(c => /UPGRADE_STATUS/.test(c)).length === 1" : "!window.__fake.log.some(c => /FILE_END/.test(c))"}`);
+  await shot(install ? 'failed-install-disconnected' : 'failed-chunk-disconnected');
+  return ok ? [] : ['failed transfer/install did not stop/release the updater session'];
+}
+
+async function failedUnlock(file) {
+  console.log('--- unlock verification blocks firmware upload');
+  await connectedPage('?device=vrx&fw=18_21_10&unlockFails=1');
+  await chooseFile(file);
+  await until("!document.querySelector('#flash').disabled", 10000);
+  await js("document.querySelector('#unlock-before-flash').checked = true; document.querySelector('#unlock-before-flash').dispatchEvent(new Event('change')); document.querySelector('#flash').click()");
+  await until("document.querySelector('#ask').open", 3000);
+  await js("document.querySelector('#ask-ok').click()");
+  await until("!document.querySelector('#result').hidden", 10000);
+  const ok = await js("document.querySelector('#result').dataset.ok === 'false' && window.__fake.starts.length === 2 && !window.__fake.log.some(c => /FILE_END/.test(c))");
+  return ok ? [] : ['failed unlock proof allowed firmware upload'];
+}
+
+async function unlockSelection(file, invalidFile) {
+  console.log('--- automatic unlock selection, manual override and context reset');
+  const failures = [];
+  const selected = () => js("document.querySelector('#unlock-before-flash').checked");
+  const loaded = (name = path.basename(file)) => until(`document.querySelector('#file-name').textContent === ${JSON.stringify(name)}
+    && !document.querySelector('#file-meta').hidden && [...document.querySelectorAll('#file-meta dt')].some(e => e.textContent === 'MD5')
+    && !document.querySelector('#file-status').textContent`, 10000, 'valid image loaded');
+  const anotherFile = path.join(out, 'reselected-vrx.img');
+  fs.copyFileSync(file, anotherFile);
+  await connectedPage('?device=vrx&fw=18_21_10');
+  if (await selected()) failures.push('unlock selected without an image');
+  await chooseFile(file); await loaded();
+  if (!await selected()) failures.push('older image did not select unlock');
+  await js("document.querySelector('#unlock-before-flash').click(); document.querySelector('#verbose').click()");
+  if (await selected()) failures.push('manual disable was overwritten');
+  await chooseFile(anotherFile); await loaded(path.basename(anotherFile));
+  if (!await selected()) failures.push('new file selection did not restore automatic unlock');
+  await js("document.querySelector('#disconnect').click()");
+  await until("document.querySelector('#unit-status').dataset.kind === 'idle'", 5000);
+  if (await selected()) failures.push('unlock remained selected while disconnected');
+  await js("document.querySelector('#connect').click()");
+  await until("document.querySelector('#unit-status').dataset.kind === 'ok'", 10000); await loaded(path.basename(anotherFile));
+  if (!await selected()) failures.push('reconnection did not re-evaluate the existing image');
+  for (const fw of ['17_5_8', '16_5_7', '19_0_0']) {
+    await connectedPage(`?device=vrx&fw=${fw}`);
+    await chooseFile(file); await loaded();
+    if (await selected() !== (fw === '19_0_0')) failures.push(`wrong automatic selection for current ${fw}`);
+    if (fw === '17_5_8') {
+      await js("document.querySelector('#unlock-before-flash').click(); document.querySelector('#verbose').click()");
+      if (!await selected()) failures.push('manual enable was overwritten');
+    }
+  }
+  await chooseFile(invalidFile);
+  await until("document.querySelector('#checks').textContent.includes('RSA signature')", 10000);
+  if (await selected()) failures.push('invalid image auto-selected unlock');
+  if (!await js("window.__fake.log.every(c => /FIND_DEVICE/.test(c))")) failures.push('selection tests wrote to the device');
+  return failures;
+}
+
 // a zip shaped like the vendor's download, and an .img.xz
-const imgMd5 = createHash('md5').update(fs.readFileSync(img)).digest('hex');
 const zip = path.join(out, 'Firmware_V18.21.10.zip');
 execFileSync('python3', ['-c', `
 import sys, zipfile
@@ -199,13 +239,73 @@ with zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED) as z:
 `, zip, img, path.basename(img)]);
 const xzFile = path.join(out, `${path.basename(img)}.xz`);
 fs.writeFileSync(xzFile, execFileSync('xz', ['-c', '-6', img], { maxBuffer: 1 << 30 }));
+const syntheticVrx = path.join(out, 'Ascent_G_Gnd_17_5_8.img');
+fs.writeFileSync(syntheticVrx, vrxImage());
+const syntheticBundle = path.join(out, 'synthetic-mixed.zip');
+fs.writeFileSync(syntheticBundle, storedZip([[path.basename(img), fs.readFileSync(img)], [path.basename(syntheticVrx), fs.readFileSync(syntheticVrx)]]));
+const fwu = path.join(out, 'fpvos.fwu');
+const fwuHeader = Buffer.alloc(512), fwuParts = ['kernel','dtb','root'].map((s) => Buffer.from(s));
+fwuHeader.write('FPVOSUP1'); [1,485,525,3].forEach((n,i) => fwuHeader.writeUInt32LE(n,8+i*4)); fwuHeader.write('browser-test',24);
+fwuParts.forEach((p,i) => { const at=96+104*i; fwuHeader.write(['kernel.img','ascent-gnd485.dtb','rootfs.cpio.uboot'][i],at);
+  fwuHeader.writeUInt32LE(p.length,at+32); fwuHeader.write(createHash('sha256').update(p).digest('hex'),at+36); });
+fwuHeader.writeUInt32LE(crc32(fwuHeader),508); fs.writeFileSync(fwu,Buffer.concat([fwuHeader,...fwuParts]));
 
+const p1Fwu = path.join(out, 'fpvos-p1-air.fwu');
+const p1Header = Buffer.from(fwuHeader);
+p1Header.writeUInt32LE(1345409867, 12);
+['kernel.img', 'betafpv-p1-air.dtb', 'rootfs.cpio.gz'].forEach((name, i) => {
+  const at = 96 + 104 * i; p1Header.fill(0, at, at + 32); p1Header.write(name, at);
+});
+p1Header.fill(0, 508); p1Header.writeUInt32LE(crc32(p1Header), 508);
+fs.writeFileSync(p1Fwu, Buffer.concat([p1Header, ...fwuParts]));
+
+const harness = await openBrowser({ root, out });
+const { cdp, evaluate: js, until, screenshot: shot, chooseFile, problems } = harness;
+const base = `${harness.origin}/`;
 let failures = [];
 try {
-  failures.push(...await scenario('kept', '', { reselect: false }));
+  for (const name of PUBLIC_ASSETS) {
+    const response = await fetch(`${base}${name}`);
+    if (!response.ok) throw new Error(`Missing public asset: ${name}`);
+    const data = Buffer.from(await response.arrayBuffer());
+    if (name.startsWith('assets/p1-updater/browser-v1/')
+      && !data.equals(fs.readFileSync(path.join(root, name)))) throw new Error('P1 recovery asset differs from the repository.');
+  }
+  for (const name of ['test/fake-serial.js', 'test/browser-harness.mjs', 'transports/node-serial.mjs', '.git/config']) {
+    if ((await fetch(`${base}${name}`)).status !== 404) throw new Error(`Private asset served: ${name}`);
+  }
+  await cdp('Page.addScriptToEvaluateOnNewDocument', {
+    source: `window.__fake = { regrant: !location.search.includes('regrant=0') };\n${fake}`,
+  });
+  await p1PreparationControls();
+  failures.push(...await scenario('kept', '?fw=17_5_3', { reselect: false }));
   failures.push(...await scenario('zip', '', { reselect: false, file: zip }));
   failures.push(...await scenario('xz', '', { reselect: false, file: xzFile }));
   failures.push(...await scenario('lost', '?regrant=0', { reselect: true }));
+  failures.push(...await scenario('stock-to-fpvos', '?device=vrx&fw=18_21_10', { reselect: true, file:fwu, source:fwu, profile:'ascent-vrx', bootstrap:true }));
+  failures.push(...await scenario('fpvos-update', '?device=fpvos', { reselect:false, file:fwu, source:fwu, profile:'fpvos-ar9311' }));
+  failures.push(...await scenario('p1-update', '?device=p1&startupDelay=8000', { reselect:false, file:p1Fwu, source:p1Fwu, profile:'fpvos-p1-air' }));
+  failures.push(...await scenario('p1-reselect', '?device=p1&regrant=0', { reselect:true, file:p1Fwu, source:p1Fwu, profile:'fpvos-p1-air' }));
+  failures.push(...await rejectedProfile('p1-rejects-vrx', '?device=p1', fwu));
+  failures.push(...await rejectedProfile('fpvos-vrx-rejects-p1', '?device=fpvos', p1Fwu));
+  failures.push(...await rejectedProfile('vrx-rejects-air', '?device=vrx', img));
+  failures.push(...await rejectedProfile('pro-cannot-be-forced', '?device=pro', img, 'ascent-vrx'));
+  failures.push(...await rejectedProfile('vrx-rejects-untrusted-signature', '?device=vrx', syntheticVrx));
+  failures.push(...await offlineProfiles(syntheticBundle));
+  failures.push(...await failedTransfer());
+  failures.push(...await failedTransfer(true));
+  if (process.env.VRX_IMG) {
+    const vrx = path.resolve(process.env.VRX_IMG);
+    const bundle = path.join(out, 'mixed-hardware.zip');
+    fs.writeFileSync(bundle, storedZip([[path.basename(img), fs.readFileSync(img)], [path.basename(vrx), fs.readFileSync(vrx)]]));
+    failures.push(...await scenario('vrx-mixed-zip', '?device=vrx', { reselect: false, file: bundle, source: vrx, profile: 'ascent-vrx' }));
+    failures.push(...await scenario('vrx-lost', '?device=vrx&regrant=0', { reselect: true, file: vrx, source: vrx, profile: 'ascent-vrx' }));
+    failures.push(...await unlockSelection(vrx, syntheticVrx));
+    failures.push(...await scenario('vrx-unlock-downgrade', '?device=vrx&fw=18_21_10&enforceRollback=1', { reselect: false, file: vrx, source: vrx, profile: 'ascent-vrx', unlock: true }));
+    failures.push(...await failedUnlock(vrx));
+    failures.push(...await rejectedProfile('air-rejects-vrx', '', vrx));
+    failures.push(...await rejectedProfile('vrx-rejects-selected-air-profile', '?device=vrx', vrx, 'ascent-air'));
+  }
   failures.push(...await looks());
 } catch (e) {
   failures.push(e.message);
@@ -213,9 +313,5 @@ try {
 failures.push(...problems);
 console.log(`screenshots: ${out}`);
 console.log(failures.length ? `FAIL\n  ${failures.join('\n  ')}` : 'PASS');
-ws.close();
-chrome.kill();
-server.close();
-await new Promise((r) => { chrome.once('exit', r); setTimeout(r, 3000); });
-try { fs.rmSync(profile, { recursive: true, force: true }); } catch { /* chrome still writing */ }
+await harness.close();
 process.exit(failures.length ? 1 : 0);

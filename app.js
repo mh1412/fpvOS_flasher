@@ -1,126 +1,17 @@
-// fpvOS Flasher: Web Serial glue and UI for ascent.js.
-
+// fpvOS Flasher: Web Serial transport and UI over hardware profiles.
+import { LinkLostError } from './transports/ascent.js';
+import { WebSerialLink } from './transports/web-serial.js';
 import {
-  CMD, Session, LinkLostError, flashImage, parseAsw, md5hex, deviceKind,
-  firmwareVersion, compareVersions, sleep,
-} from './ascent.js';
-import { openFirmware } from './archive.js';
+  PROFILES, USB_FILTERS, getProfile, profileForUsb, profileForDevice,
+} from './devices/index.js';
+import { prepareFirmware, evaluateSelection, flashFirmware } from './flasher.js';
+import { formatBytes } from './devices/common.js';
 
-// What the page can flash. One entry per kind of device: its USB id (the
-// chooser offers only these), the file names it takes (to pick one out of an
-// archive), and the models it covers, each listed on the page. Each kind's
-// protocol lives in its own module (ascent.js today).
-const DEVICES = [
-  {
-    models: ['Ascent Lite air unit', 'Ascent Lite+ air unit'],
-    // the update mode the page reboots it into has the same id
-    usbVendorId: 0x1d76,
-    usbProductId: 0x0101,
-    image: /^Ascent_H_Sky_\d+_\d+_\d+\.img$/i,
-  },
-];
-const FILTERS = DEVICES.map(({ usbVendorId, usbProductId }) => ({ usbVendorId, usbProductId }));
-const isOurs = (port) => {
-  const { usbVendorId, usbProductId } = port.getInfo();
-  return DEVICES.some((d) => d.usbVendorId === usbVendorId && d.usbProductId === usbProductId);
-};
+const isOurs = (port) => !!profileForUsb(port.getInfo());
 const hex4 = (n) => (n ?? 0).toString(16).padStart(4, '0');
 const usbId = (port) => `${hex4(port.getInfo().usbVendorId)}:${hex4(port.getInfo().usbProductId)}`;
 
 const $ = (id) => document.getElementById(id);
-
-// ------------------------------------------------------------------- link --
-
-class WebSerialLink {
-  constructor(port, { onNeedPort, onPortBack } = {}) {
-    this.port = port;
-    this.onNeedPort = onNeedPort;
-    this.onPortBack = onPortBack;
-    this.onBytes = null;
-    this.onClose = null;
-    this.closed = Promise.resolve();
-  }
-
-  async open() {
-    await this.port.open({ baudRate: 115200, bufferSize: 1 << 16 });
-    this.closing = false;
-    this.writer = this.port.writable.getWriter();
-    this.closed = new Promise((r) => { this.markClosed = r; });
-    this.#readLoop();
-  }
-
-  async #readLoop() {
-    try {
-      // a non-fatal error (framing, overrun) replaces port.readable; a lost
-      // device sets it to null
-      while (this.port.readable && !this.closing) {
-        this.reader = this.port.readable.getReader();
-        try {
-          for (;;) {
-            const { value, done } = await this.reader.read();
-            if (done) break;
-            if (value?.length) this.onBytes?.(value);
-          }
-        } catch (e) {
-          if (!this.closing) log(`serial read: ${e.message}`, 'debug');
-        } finally {
-          try { this.reader.releaseLock(); } catch { /* already released */ }
-        }
-      }
-    } finally {
-      this.markClosed();
-      this.onClose?.();
-    }
-  }
-
-  async write(bytes) {
-    if (!this.writer) throw new LinkLostError();
-    await this.writer.write(bytes);
-  }
-
-  async close() {
-    this.closing = true;
-    try { await this.reader?.cancel(); } catch { /* gone */ }
-    try { this.writer?.releaseLock(); } catch { /* pending write */ }
-    this.writer = null;
-    try { await this.port.close(); } catch { /* already closed */ }
-    await this.closed;
-  }
-
-  // After a reboot the unit enumerates as a new USB device. Chrome normally
-  // keeps the permission and lists it in getPorts(); if not, the user has to
-  // pick it again, which needs a click: offer that after a while, and keep
-  // looking meanwhile.
-  async reopen({ timeoutMs = 90000, signal } = {}) {
-    await this.close();
-    const start = Date.now();
-    let picked = null;
-    let asked = false;
-    for (;;) {
-      if (signal?.aborted) throw new Error('Cancelled.');
-      const waited = Date.now() - start;
-      if (!asked && this.onNeedPort && waited > 10000) {
-        asked = true;
-        this.onNeedPort().then((p) => { picked = p; });
-      }
-      // once the user was asked, give them time to answer
-      if (waited > (asked ? Math.max(timeoutMs, 5 * 60000) : timeoutMs)) {
-        throw new Error('The device did not come back.');
-      }
-      const ports = (await navigator.serial.getPorts())
-        .filter(isOurs);
-      for (const p of picked ? [picked, ...ports] : ports) {
-        try {
-          this.port = p;
-          await this.open();
-          if (asked) this.onPortBack?.();
-          return;
-        } catch { /* not up yet, or the old dead port */ }
-      }
-      await sleep(500);
-    }
-  }
-}
 
 // ------------------------------------------------------------------ state --
 
@@ -128,8 +19,14 @@ const state = {
   link: null,
   session: null,
   info: null,
+  profile: null,     // positively identified connected hardware, never a UI override
+  selectedProfile: null, // optional image/archive target while disconnected
+  unlockOverride: null, // null = version-based automatic selection; boolean = manual choice
+  connecting: false,
   image: null,       // { file, bytes, parsed, md5 }
-  busy: false,
+  operation: null,
+  preparing: false,
+  get busy() { return this.operation !== null || this.preparing; },
   flashed: null,     // result line after a flash
 };
 
@@ -162,7 +59,7 @@ function logText() {
 async function connect() {
   let port;
   try {
-    port = await navigator.serial.requestPort({ filters: FILTERS });
+    port = await navigator.serial.requestPort({ filters: USB_FILTERS });
   } catch {
     return;   // chooser closed
   }
@@ -170,38 +67,53 @@ async function connect() {
 }
 
 async function openPort(port) {
-  if (state.link || state.busy) return;
+  if (state.link || state.busy || state.connecting || !isOurs(port)) return;
+  state.connecting = true;
+  const usbProfile = profileForUsb(port.getInfo());
   const link = new WebSerialLink(port, {
+    // fpvOS boards share USB IDs and the same strict transport. Resolve the
+    // board from FIND_DEVICE; each stage supplies its reconnect policy.
+    acceptPort: (info) => profileForUsb(info) === usbProfile,
+    serial: usbProfile.transport.serial,
+    filters: usbProfile.meta.usb,
+    log,
     onNeedPort: askForPort,
     onPortBack: () => { $('reselect').hidden = true; portRequest = null; },
   });
   setUnitStatus('connecting', 'Connecting…');
+  render();
   try {
     await link.open();
   } catch (e) {
     setUnitStatus('error', "Could not open the port. Is another program (the vendor's PC tool, a terminal) using it?");
     log(`open: ${e.message}`, 'error');
+    state.connecting = false;
+    render();
     return;
   }
   state.link = link;
-  state.session = new Session(link, log);
+  state.session = usbProfile.transport.protocol.createSession(link, log, usbProfile.transport);
   watchLink(link);
   // which device this is, and whether another one with the same id is
   // allowed too (the browser does not tell their serial numbers)
-  const same = (await navigator.serial.getPorts().catch(() => [])).filter(isOurs).length;
+  const same = (await navigator.serial.getPorts().catch(() => [])).filter((p) => usbId(p) === usbId(port)).length;
   log(`opened the port of USB device ${usbId(port)}${same > 1 ? ` (${same} such devices allowed on this page)` : ''}`);
   try {
-    state.info = await state.session.deviceInfo();
+    state.info = await state.session.deviceInfo({ timeoutMs: usbProfile.transport.timeouts.connect ?? 6000 });
+    state.profile = profileForDevice(state.info, port.getInfo());
+    state.unlockOverride = null;
     log(`connected: ${state.info.firmware || state.info.name} (hw ${state.info.hardware}, sn ${state.info.serial})`);
-    setUnitStatus('ok', 'Connected');
+    setUnitStatus(state.profile ? 'ok' : 'error', state.profile ? 'Connected' : 'Connected device has no supported hardware profile.');
   } catch (e) {
     log(`no answer to FIND_DEVICE: ${e.message}`, 'error');
     setUnitStatus('error', 'The port opened but the device does not answer. Wait for it to finish booting, then reconnect. '
       + 'If other USB devices are plugged in (a flight controller, an ESP32 board), unplug them and plug the unit straight into the computer.');
     await link.close();
-    state.link = state.session = null;
+    state.link = state.session = state.info = state.profile = null;
   }
+  state.connecting = false;
   render();
+  if (state.profile && state.image?.file && !state.selectedProfile) loadFile(state.image.file);
 }
 
 // closed is a new promise after every reopen, and a flash reopens on its own
@@ -212,7 +124,8 @@ function watchLink(link) {
 }
 
 function disconnected() {
-  state.link = state.session = state.info = null;
+  state.link = state.session = state.info = state.profile = null;
+  state.unlockOverride = null;
   setUnitStatus('idle', 'Not connected');
   log('device disconnected');
   render();
@@ -236,7 +149,7 @@ function askForPort() {
 
 async function reselect() {
   try {
-    const port = await navigator.serial.requestPort({ filters: FILTERS });
+    const port = await navigator.serial.requestPort({ filters: state.link?.filters ?? USB_FILTERS });
     $('reselect').hidden = true;
     portRequest?.(port);
     portRequest = null;
@@ -249,19 +162,51 @@ function setUnitStatus(kind, text) {
   s.querySelector('span').textContent = text;
 }
 
+// Stock P1 uses Web Serial to enter U-Boot, then WebHID for RAM recovery.
+// Each chooser must run directly from its own user gesture after re-enumeration.
+let preparationAbort = null;
+async function prepareP1(loadRecovery) {
+  if (state.busy || state.connecting || state.link || !$('p1-stock-confirm').checked) return;
+  const preparation = getProfile('fpvos-p1-air').meta.preparation;
+  state.preparing = true;
+  preparationAbort = new AbortController();
+  const signal = preparationAbort.signal;
+  const progress = (text) => { $('p1-preparation-status').textContent = text; };
+  render();
+  try {
+    if (loadRecovery) {
+      const [device] = await navigator.hid.requestDevice({ filters: [preparation.hidFilter] });
+      if (!device) { progress('No bootloader selected. Select the same P1 when it appears as USB download gadget.'); return; }
+      await preparation.loadRecovery(device, { signal, progress, log });
+      progress('Recovery boot requested. Wait for USB to reconnect, then click Connect above and select the P1 Air serial port. Choose your P1 .fwu file and click Flash.');
+      log('P1 recovery loaded through WebHID; connect its new serial port to install firmware.');
+    } else {
+      const port = await navigator.serial.requestPort({ filters: [preparation.serialFilter] });
+      await preparation.enterBootloader(port, { signal });
+      progress('Restart requested. Wait for USB download gadget, then select it with “Load P1 recovery”. If it stays as Sirius, allow stock firmware to finish starting and retry Restart stock P1.');
+      log('Requested stock P1 USB bootloader through Web Serial.');
+    }
+  } catch (e) {
+    const message = e.name === 'NotFoundError' ? 'No device selected. You can try again.'
+      : `${e.message} If the P1 is still in USB download mode, retry Load P1 recovery; power-cycle it to return to its installed firmware.`;
+    progress(message); log(`P1 preparation: ${message}`, 'warn');
+  } finally { state.preparing = false; preparationAbort = null; render(); }
+}
+
 // --------------------------------------------------------------- firmware --
 
 // An image as is, or the one inside a .zip / .xz / .gz / .tar.
 async function loadFile(file) {
   if (!file || state.busy) return;
+  state.unlockOverride = null;
   state.flashed = null;
   const current = { file, loading: 'Opening' };
   state.image = current;
   render();
   let opened;
   try {
-    opened = await openFirmware(file, {
-      wanted: (n) => DEVICES.some((d) => d.image.test(n)),
+    opened = await prepareFirmware(file, {
+      profile: state.selectedProfile ?? state.profile,
       onProgress: (text) => {
         if (state.image !== current) return;
         current.loading = text;
@@ -276,78 +221,60 @@ async function loadFile(file) {
     return;
   }
   if (state.image !== current) return;   // another file was dropped meanwhile
-  const { bytes, name, trail, notes } = opened;
-  const parsed = parseAsw(bytes, name);
-  const md5 = parsed.errors.length ? null : md5hex(bytes);
-  state.image = { file, bytes, name, trail, notes, parsed, md5 };
+  const { bytes, name, trail, parsed, md5 } = opened;
+  state.image = { file, ...opened };
   log(`file ${[...trail, name].join(' > ')}: ${bytes.length} bytes, ${parsed.boardName ?? 'not an image'} `
     + `${parsed.versionText ?? ''}${md5 ? `, md5 ${md5}` : ''}`);
   render();
 }
 
 // Problems from the image and the unit together: [{level, text}]
-function checks() {
-  const out = [];
-  if (state.image?.error) out.push({ level: 'error', text: state.image.error });
-  for (const n of state.image?.notes ?? []) out.push({ level: 'info', text: n });
-  const img = state.image?.parsed;
-  if (img) {
-    for (const e of img.errors) out.push({ level: 'error', text: e });
-    for (const w of img.warnings) out.push({ level: 'warn', text: w });
-  }
-  if (state.info) {
-    const kind = deviceKind(state.info);
-    if (kind === 'ground') out.push({ level: 'error', text: 'The connected device is a ground unit (goggles or VRX), and this image is for an air unit.' });
-    if (kind === 'unknown') out.push({ level: 'warn', text: `Could not tell what the device is ("${state.info.firmware || state.info.name}").` });
-    const have = firmwareVersion(state.info.firmware);
-    if (img?.version && have && !img.errors.length) {
-      const c = compareVersions(img.version, have);
-      if (c < 0) out.push({ level: 'warn', text: `The image (${img.versionText}) is older than the device's ${have.join('.')}. The device may refuse it.` });
-      if (c === 0) out.push({ level: 'info', text: `Same version number as the device (${have.join('.')}). fpvOS images keep the stock number, so this is normal.` });
-    }
-  }
-  return out;
+function selection() {
+  return state.operation?.plan ?? evaluateSelection({ info: state.info, profile: state.profile, image: state.image,
+    selectedProfile: state.selectedProfile, unlockOverride: state.unlockOverride });
 }
 
 // ------------------------------------------------------------------ flash --
 
-const STAGES = ['clean', 'upload', 'install', 'restart'];
+const STAGES = ['unlock', 'clean', 'upload', 'install', 'restart'];
 let abort = null;
 
 async function flash() {
   const img = state.image;
   if (!canFlash()) return;
-  const ok = await ask(`Flash ${img.parsed.remoteName}?`,
-    'The device writes its other flash bank and switches to it. Keep it powered and connected until it restarts. '
-      + 'This flasher is experimental: use it at your own risk.',
-    'Flash');
-  if (!ok || !canFlash()) return;
+  const profile = state.profile;
+  const session = state.session, info = state.info, plan = selection();
+  const unlock = plan.unlockSelected;
+  const ok = await ask(`${unlock ? 'Unlock and flash' : 'Flash'} ${img.parsed.remoteName}?`,
+    `${plan.bootstrapSelected ? 'Upload the experimental RAM updater, then select this VRX’s new USB port. Disconnect other VRXs. No backup export is performed. ' : ''}${unlock ? profile.meta.unlock.notice + ' ' : ''}${plan.executionProfile.meta.notices.flash} This flasher is experimental: use it at your own risk.`,
+    unlock ? 'Unlock and flash' : 'Flash');
+  if (!ok || !canFlash() || state.image !== img || state.profile !== profile || state.session !== session
+    || state.info !== info || selection().unlockSelected !== unlock) return;
 
-  state.busy = true;
+  state.operation = Object.freeze({ plan, session, info, image: img });
   state.flashed = null;
   abort = new AbortController();
   render();
   setProgress({ stage: 'clean', frac: 0, text: 'Starting' });
   const t0 = Date.now();
   try {
-    const after = await flashImage(state.session, {
-      bytes: img.bytes,
-      md5: img.md5,
-      remoteName: img.parsed.remoteName,
-      chunkSize: chunkSize(),
-    }, { progress: setProgress, log, signal: abort.signal });
+    const after = await flashFirmware(session, profile, img, {
+      info, usbInfo: state.link.port.getInfo(),
+      unlock,
+      progress: setProgress, log, signal: abort.signal,
+    });
     const secs = Math.round((Date.now() - t0) / 1000);
     state.flashed = { ok: true, text: after
       ? `Flashed in ${secs} s. The device now reports ${after.firmware || after.name}.`
       : `Flashed in ${secs} s. The device is restarting; reconnect to check it.` };
-    if (after) state.info = after;
+    if (after) { state.info = after; state.profile = profileForDevice(after, state.link.port.getInfo()); state.unlockOverride = null; }
     log(state.flashed.text);
   } catch (e) {
     state.flashed = { ok: false, text: e.message };
     log(`flash failed: ${e.message}`, 'error');
     setProgress({ stage: 'failed', frac: null, text: 'Failed' });
   } finally {
-    state.busy = false;
+    state.operation = null;
     abort = null;
     $('reselect').hidden = true;
     if (state.link?.writer) watchLink(state.link);
@@ -356,14 +283,8 @@ async function flash() {
   }
 }
 
-function chunkSize() {
-  const n = state.info?.maxChunk;
-  return n > 0 ? Math.min(n, 1 << 20) : 1 << 20;
-}
-
 function canFlash() {
-  return !!(state.session && state.info && state.image?.md5 && !state.busy
-    && !checks().some((c) => c.level === 'error'));
+  return !!state.session && !state.busy && !state.connecting && selection().canFlash;
 }
 
 let currentStage = null;
@@ -373,7 +294,7 @@ function setProgress({ stage, frac, text }) {
   if (frac != null) $('bar').style.width = `${(frac * 100).toFixed(1)}%`;
   $('bar').dataset.state = stage === 'failed' ? 'failed' : stage === 'done' ? 'done' : 'run';
   $('stage-text').textContent = text;
-  $('cancel').hidden = !state.busy || !['clean', 'upload'].includes(stage);
+  $('cancel').hidden = !state.busy || !['unlock', 'clean', 'upload'].includes(stage);
   const idx = STAGES.indexOf(stage);
   document.querySelectorAll('#stages li').forEach((li, i) => {
     li.dataset.state = stage === 'done' || i < idx ? 'done' : i === idx ? 'active' : '';
@@ -381,10 +302,10 @@ function setProgress({ stage, frac, text }) {
 }
 
 async function networkMode() {
-  if (!state.session || state.busy) return;
-  if (!await ask('Switch to network mode?', 'The device leaves serial mode until it reboots, and this page loses it.', 'Switch')) return;
+  if (!state.session || !state.profile?.transport.protocol.networkMode || state.busy) return;
+  if (!await ask('Enable USB network mode?', state.profile.meta.notices.network, 'Enable')) return;
   try {
-    await state.session.request(CMD.NETWORK_MODE, undefined, { timeoutMs: 3000, retryMs: 0 });
+    await state.profile.transport.protocol.networkMode(state.session);
   } catch (e) {
     if (!(e instanceof LinkLostError)) log(`network mode: ${e.message}`, 'warn');
   }
@@ -405,10 +326,8 @@ function ask(title, text, okLabel) {
 
 // ----------------------------------------------------------------- render --
 
-const fmtBytes = (n) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(2)} MiB` : `${(n / 1024).toFixed(1)} KiB`);
-const hex = (n) => `0x${n.toString(16).padStart(8, '0')}`;
-
 function render() {
+  const plan = selection();
   const supported = 'serial' in navigator;
   $('unsupported').hidden = supported;
   if (!supported && !window.isSecureContext) {
@@ -420,20 +339,43 @@ function render() {
   // unit
   const info = state.info;
   $('connect').hidden = !!state.link;
-  $('connect').disabled = !supported || state.busy;
+  $('connect').disabled = !supported || state.busy || state.connecting;
   $('disconnect').hidden = !state.link;
-  $('disconnect').disabled = state.busy;
-  $('netmode').disabled = !state.session || state.busy;
+  $('disconnect').disabled = state.busy || state.connecting;
+  $('netmode').disabled = !state.session || !state.profile?.transport.protocol.networkMode || state.busy || state.connecting;
+  $('profile').disabled = state.busy;
+  const p1Available = supported && 'hid' in navigator;
+  $('p1-browser-support').hidden = p1Available;
+  $('p1-stock-confirm').disabled = state.busy;
+  for (const id of ['p1-enter-bootloader', 'p1-load-recovery']) {
+    $(id).disabled = !p1Available || !$('p1-stock-confirm').checked || state.busy || state.connecting || !!state.link;
+  }
+  $('p1-preparation-cancel').hidden = !state.preparing;
+  const unlockFeature = state.profile?.meta.unlock ?? state.selectedProfile?.meta.unlock;
+  $('unlock-options').hidden = !unlockFeature;
+  $('unlock-before-flash').disabled = state.busy || !plan.unlockAvailable;
+  $('unlock-before-flash').checked = plan.unlockSelected;
+  $('unlock-label').textContent = unlockFeature?.label ?? '';
+  $('unlock-hint').textContent = !plan.unlockAvailable ? 'Connect a healthy normal-mode standard VRX with a valid reported firmware version to use preflash unlock.'
+    : state.unlockOverride != null ? `Manually ${plan.unlockSelected ? 'enabled' : 'disabled'} for this selection. Signed firmware validation remains enabled.`
+    : plan.automaticUnlock ? `Automatically selected for downgrade: ${state.image.parsed.versionText} < ${plan.currentVersion.join('.')}. One-shot RAM overlay; signed firmware validation remains enabled.`
+    : !state.image?.md5 || state.image.parsed.profileId !== state.profile.meta.id ? 'Choose a valid matching image to compare with the connected firmware. You can also select unlock manually.'
+    : 'Automatically off for equal/newer images. You can enable it manually; signed firmware validation remains enabled.';
+  $('stage-unlock').hidden = !plan.unlockSelected;
+  $('profile-hint').textContent = state.selectedProfile ? `Image target: ${state.selectedProfile.meta.name}.`
+    : state.profile ? `Detected: ${state.profile.meta.name}.`
+    : 'Connect a device to select its image from an archive, or choose a profile for offline checks.';
   $('unit-info').hidden = !info;
   if (info) {
     const rows = [
+      ['Profile', state.profile?.meta.name ?? 'unsupported'],
       ['Firmware', info.firmware],
       ['Device', info.name],
       ['Hardware', info.hardware],
       ['Serial', info.serial],
       ['SDK', info.sdk],
       ['CPU temperature', info.cpuTemp != null ? `${info.cpuTemp} °C` : ''],
-      ['Max chunk', info.maxChunk ? fmtBytes(info.maxChunk) : ''],
+      ['Max chunk', info.maxChunk ? formatBytes(info.maxChunk) : ''],
     ].filter(([, v]) => v);
     $('unit-info').replaceChildren(...rows.flatMap(([k, v]) => [el('dt', k), el('dd', v)]));
   }
@@ -451,26 +393,18 @@ function render() {
   $('sections').hidden = !p?.sections.length;
   if (img) $('file-name').textContent = img.name ?? img.file.name;
   if (p) {
-    const rows = [
-      ['From', img.trail.length ? img.trail.join(' › ') : ''],
-      ['Image', p.boardName ?? 'unknown'],
-      ['Version', p.versionText ?? ''],
-      ['Size', fmtBytes(img.bytes.length)],
-      ['Checksum', p.crcStored != null ? (p.crcStored === p.crcCalc ? `OK · ${hex(p.crcCalc)}` : `bad: ${hex(p.crcStored)} in header, file is ${hex(p.crcCalc)}`) : '',
-        p.crcStored === p.crcCalc ? 'good' : ''],
-      ['MD5', img.md5 ?? ''],
-      ['Sent as', p.remoteName ?? ''],
-    ].filter(([, v]) => v);
-    $('file-meta').replaceChildren(...rows.flatMap(([k, v, cls]) => [el('dt', k), el('dd', v, cls)]));
-    $('sections').querySelector('tbody').replaceChildren(...p.sections.map((s) => {
+    const headings = $('sections').querySelectorAll('th');
+    img.view.columns.forEach((text, i) => { headings[i].textContent = text; });
+    $('file-meta').replaceChildren(...img.view.facts.flatMap(([k, v, cls]) => [el('dt', k), el('dd', v, cls)]));
+    $('sections').querySelector('tbody').replaceChildren(...img.view.rows.map((row) => {
       const tr = document.createElement('tr');
-      tr.append(el('td', s.name), el('td', fmtBytes(s.length), 'num'), el('td', `0x${s.offset.toString(16)}`, 'num'), el('td', s.upgrade ? 'yes' : 'no'));
+      row.forEach((text, i) => tr.append(el('td', text, i === 1 || i === 2 ? 'num' : '')));
       return tr;
     }));
   }
 
   // checks
-  const cs = checks();
+  const cs = plan.issues;
   $('checks').replaceChildren(...cs.map((c) => {
     const li = el('li', c.text);
     li.dataset.level = c.level;
@@ -480,9 +414,9 @@ function render() {
 
   // flash
   $('flash').disabled = !canFlash();
-  $('flash').textContent = state.busy ? 'Flashing…' : 'Flash';
-  $('cancel').hidden = !state.busy || !['clean', 'upload'].includes(currentStage);
-  $('progress').hidden = !state.busy && !state.flashed;
+  $('flash').textContent = state.operation ? 'Flashing…' : plan.unlockSelected ? 'Unlock and flash' : 'Flash';
+  $('cancel').hidden = !state.operation || !['unlock', 'clean', 'upload'].includes(currentStage);
+  $('progress').hidden = !state.operation && !state.flashed;
   $('result').hidden = !state.flashed;
   if (state.flashed) {
     $('result').dataset.ok = state.flashed.ok;
@@ -505,15 +439,30 @@ function el(tag, text, cls) {
 // ------------------------------------------------------------------ wiring --
 
 function init() {
-  $('devices').replaceChildren(...DEVICES.flatMap((d) => d.models).map((m) => el('li', m)));
+  $('devices').replaceChildren(...PROFILES.flatMap((p) => p.meta.models).map((m) => el('li', m)));
+  for (const p of PROFILES) {
+    const option = el('option', p.meta.name); option.value = p.meta.id;
+    $('profile').append(option);
+  }
+  $('profile').onchange = () => {
+    state.unlockOverride = null;
+    state.selectedProfile = getProfile($('profile').value);
+    if (state.image?.file) loadFile(state.image.file);
+    else render();
+  };
   render();
   if (!('serial' in navigator)) return;
 
   $('connect').onclick = connect;
+  $('p1-stock-confirm').onchange = render;
+  $('p1-enter-bootloader').onclick = () => prepareP1(false);
+  $('p1-load-recovery').onclick = () => prepareP1(true);
+  $('p1-preparation-cancel').onclick = () => preparationAbort?.abort();
   $('disconnect').onclick = disconnect;
   $('netmode').onclick = networkMode;
   $('reselect').onclick = reselect;
   $('flash').onclick = flash;
+  $('unlock-before-flash').onchange = () => { state.unlockOverride = $('unlock-before-flash').checked; render(); };
   $('cancel').onclick = () => { abort?.abort(); log('cancelling after the current step', 'warn'); };
   // cleared after each pick: choosing the same file again fires no change
   // event otherwise, and the pick would be silently ignored

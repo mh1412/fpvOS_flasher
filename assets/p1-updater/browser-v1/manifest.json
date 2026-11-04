@@ -1,0 +1,51 @@
+{
+  "format": 1,
+  "version": "browser-v1",
+  "board": "p1-air",
+  "board_id": 1345409867,
+  "source": "https://github.com/mh1412/fpvOS",
+  "source_commit": "e32ea69aac26fec989a8a7f48419356846702d41",
+  "build_config": "p1air_source_defconfig",
+  "supported_stock_firmware": [
+    "1.0.44.rel"
+  ],
+  "bootloader_fingerprints": [
+    {
+      "address": 804808584,
+      "size": 64,
+      "sha256": "8d64ac5d0fbbab044f2669df89f474bd4264515027e58d387e256e1ea9a5e700"
+    },
+    {
+      "address": 804809040,
+      "size": 64,
+      "sha256": "873222ba22f63c746288b66083ee88421c941cfdd2dc335532c42b1c2077a788"
+    },
+    {
+      "address": 804675224,
+      "size": 64,
+      "sha256": "d5e7caa635ba5af4b785d0e665f8ddeccadd6c2f7e3afaa483725954a328992e"
+    },
+    {
+      "address": 804805456,
+      "size": 64,
+      "sha256": "fa1863401a64e73cb609ac67db1e64163a8998c6d83c7672557afcec67709910"
+    }
+  ],
+  "files": {
+    "kernel.img": {
+      "size": 5294080,
+      "sha256": "361736b3949ac03b87b43926508768a071da182f61543cc51ccd9f8ff2785a1c",
+      "address": 608174080
+    },
+    "betafpv-p1-air.dtb": {
+      "size": 8940,
+      "sha256": "e701af012e2b6d6481359abed266413ac39ac5df04e5b6d3f192c5320814109c",
+      "address": 570949632
+    },
+    "recovery-initrd.img": {
+      "size": 892,
+      "sha256": "46e3972df53c49ccb32cfe7806ea1920c083b83f2b99387ef4739c6804fa66df",
+      "address": 637534208
+    }
+  }
+}
