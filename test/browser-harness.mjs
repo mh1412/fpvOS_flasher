@@ -7,10 +7,10 @@ import { spawn } from 'node:child_process';
 
 export const PUBLIC_ASSETS = new Set(['index.html', 'app.js', 'flasher.js', 'firmware.js',
   'devices/index.js', 'devices/common.js', 'devices/ascent-air.js', 'devices/ascent-vrx.js', 'devices/fpvos-ar9311.js', 'devices/fpvos-p1-air.js', 'devices/fpvos-bundle.js',
-  'stages/ascent.js', 'stages/vrx-unlock.js', 'stages/fpvos.js', 'stages/ar9311-bootstrap.js', 'transports/ascent.js', 'transports/web-serial.js',
+  'stages/ascent.js', 'stages/vrx-unlock.js', 'stages/fpvos.js', 'stages/ar9311-bootstrap.js', 'stages/p1-bootstrap.js', 'transports/p1-hid.js', 'transports/ascent.js', 'transports/web-serial.js',
   'assets/ar9311-updater/2026.10.31-ascent-vrx.1/manifest.json', 'assets/ar9311-updater/2026.10.31-ascent-vrx.1/fpvos-update-ar9311',
   'assets/ar9311-updater/2026.10.31-ascent-vrx.1/bootstrap.sh', 'assets/ar9311-updater/COPYING',
-  'assets/p1-updater/p1-stock-preparation-v1.zip', 'assets/p1-updater/README.txt', 'assets/p1-updater/COPYING',
+  'assets/p1-updater/browser-v1/manifest.json', 'assets/p1-updater/browser-v1/kernel.img', 'assets/p1-updater/browser-v1/betafpv-p1-air.dtb', 'assets/p1-updater/browser-v1/recovery-initrd.img', 'assets/p1-updater/README.txt', 'assets/p1-updater/COPYING',
   'archive.js', 'xz.js', 'checksum.js', 'fonts/ChakraPetch-Medium.ttf', 'fonts/ChakraPetch-SemiBold.ttf']);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

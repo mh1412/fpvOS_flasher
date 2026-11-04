@@ -137,21 +137,33 @@ acknowledge a serial reboot without restarting, so manual recovery can be needed
 ## AR9311 fpvOS recovery service
 
 Stock P1 1.0.44 uses a nine-byte serial bootloader-entry protocol, not Ascent's
-OTRA file-transfer service. It is deliberately excluded from the Web Serial
-registry. The Device panel instead offers a versioned preparation ZIP built
-by `tools/package-p1-bootstrap.py`. It contains `tools/prepare-p1.py`, the
-pinned P1 standalone updater/launcher, manifest, guide and license.
+file staging protocol. Its profile owns a `preparation` policy; the Device panel
+uses that policy for separate Web Serial and WebHID chooser gestures. Preparation
+locks normal connection/flashing controls and has its own cancellation state.
+The same physical P1 changes USB identity at each step. Recovery is identified
+through the normal FIND_DEVICE path before the existing installer can flash.
 
-The Linux helper checks stock identity over SSH, using a TCP proxy bound to
-the selected USB NIC with `SO_BINDTODEVICE`. It retains SSH host-key checks
-and never falls back to another network route. It stages files in a private
-directory, checks SHA-256 on the device, and uses exclusive hard links to
-publish the installer, launcher and finally the clean flag in `/usrdata`.
-Failure before arming removes only this attempt's files; an armed flag keeps
-its verified installer even if reboot fails. No firmware is installed by the
-helper. On the clean boot, the launcher copies the updater to RAM and removes
-its staging files. The existing P1 browser profile then validates recovery,
-installs the selected bundle and verifies the rebooted firmware.
+`stages/p1-bootstrap.js` downloads every `browser-v1` recovery asset and verifies
+its SHA-256 against a hash-pinned manifest before opening the HID transport.
+`transports/p1-hid.js` implements only bounded RAM reads/writes and fixed CRC/boot
+commands. It never exposes vendor NAND update operations. The vendor HID report
+descriptor does not describe the raw protocol replies. A fixed one-byte,
+RAM-only protocol adaptation makes replies fit input report 4, with at most
+16 payload bytes. This initial probe precedes readable identity: USB descriptors
+and the user's explicit stock-version selection restrict entry, followed by
+four bootloader instruction fingerprints and the complete dispatch table before
+any command callback or image upload is allowed. Unknown builds stop and require
+a power cycle; the adaptation does not persist. It is not general P1 support.
+
+A temporary command callback, also read back, runs only generated CRC checks
+and the fixed RAM boot command. All three images need successful device CRCs
+before boot. The pinned recovery kernel includes its own root; a small external
+initramfs overrides `/init` to force recovery even if an older fpvOS root exists.
+`tools/package-p1-recovery.py --check` verifies this deterministic override against
+its supplied source. Existing NAND installation policy remains in the updater.
+Cancellation, transfer errors and failed verification never trigger boot/flash;
+retry preparation or power-cycle the unit. Linux HID permissions can be needed.
+Windows/macOS HID behavior is not yet qualified.
 
 `devices/fpvos-bundle.js` validates the shared `FPVOSUP1` envelope using each
 board's manifest policy. `devices/fpvos-p1-air.js` uses board ID 1345409867,

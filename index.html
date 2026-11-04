@@ -257,14 +257,26 @@
     <dl id="unit-info" hidden></dl>
     <details id="p1-preparation">
       <summary>Installing fpvOS on a stock BETAFPV P1?</summary>
-      <p>First run the one-time P1 preparation helper on Linux. It copies the bundled
-        installer over USB networking and restarts the unit into recovery.</p>
-      <p><a id="p1-preparation-download" href="assets/p1-updater/p1-stock-preparation-v1.zip" download>Download P1 preparation kit</a>
-        · Requires stock 1.0.44, Python 3 and OpenSSH.</p>
-      <p>Extract the kit and follow its README to set up USB networking. Keep external power
-        connected, then run <code>python3 prepare-p1.py --execute</code>.
-        When recovery appears, click Connect above, choose the fpvOS P1 port,
-        and select your <code>fpvos-p1-air.fwu</code> below.</p>
+      <p>Let the stock P1 finish starting after power-on. Prepare it directly in this browser, then install your P1 <code>.fwu</code>
+        firmware. Keep external power connected and disconnect other Artosyn devices.</p>
+      <p>The same P1 appears as a serial port, a USB bootloader, then a recovery serial
+        port. Your browser asks for permission for each USB mode.</p>
+      <p><label><input id="p1-stock-confirm" type="checkbox">
+        This is a standard P1 Air with stock firmware 1.0.44. Other stock versions
+        and P1 AIO models are not supported.</label></p>
+      <p><button id="p1-enter-bootloader">1. Restart stock P1</button>
+        Select its Sirius serial port.</p>
+      <p><button id="p1-load-recovery">2. Load P1 recovery</button>
+        Select the same P1, now called USB download gadget. If it is already in this
+        mode, start here.</p>
+      <p id="p1-browser-support" hidden>Stock preparation requires desktop Chrome or Edge
+        with Web Serial and WebHID.</p>
+      <p id="p1-preparation-status" role="status" aria-live="polite">After recovery starts,
+        click Connect above, select the P1 Air serial port, choose your firmware below and click Flash.</p>
+      <button id="p1-preparation-cancel" hidden>Cancel preparation</button>
+      <p>Preparation runs in RAM; it does not replace the bootloader. Tested on Linux Chromium;
+        Windows and macOS are not yet verified. Linux may need USB/HID permissions:
+        <a href="assets/p1-updater/README.txt" target="_blank" rel="noopener">setup and recovery guide</a>.</p>
     </details>
   </section>
 
@@ -349,7 +361,7 @@
       <p><b>BETAFPV P1 Air · fpvOS:</b> select a full P1 <code>.fwu</code> bundle.
         The unit enters clean recovery, installs and verifies the image, then reboots.
         Keep external power connected. For initial installation from stock 1.0.44,
-        use the preparation kit in the Device panel first. Stock images and VRX bundles
+        use the browser preparation controls in the Device panel first. Stock images and VRX bundles
         are not supported by this profile.</p>
       <p>Close the vendor's PC tool and any serial terminal first: only one program can use the port.</p>
       <p>On Linux your user needs access to <code>/dev/ttyACM*</code> (the <code>dialout</code> group),

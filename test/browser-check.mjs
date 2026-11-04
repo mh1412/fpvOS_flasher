@@ -31,12 +31,28 @@ async function connectedPage(query = '') {
   await until("document.readyState === 'complete' && document.querySelector('#unit-info') && !document.querySelector('#unit-info').hidden", 10000, 'auto-connect');
 }
 
+async function p1PreparationControls() {
+  console.log('--- P1 preparation permissions and cancellation');
+  await connectedPage('?device=p1');
+  await js("document.querySelector('#disconnect').click()");
+  await until("!document.querySelector('#connect').hidden", 5000);
+  if (!await js("document.querySelector('#p1-load-recovery').disabled")) throw new Error('Stock version confirmation is required.');
+  await js("document.querySelector('#p1-stock-confirm').click()");
+  await until("!document.querySelector('#p1-load-recovery').disabled", 3000);
+  await js(`navigator.hid.requestDevice = () => new Promise(resolve => { window.resolveP1Chooser = resolve; });
+    document.querySelector('#p1-load-recovery').click();`);
+  if (!await js("document.querySelector('#connect').disabled && document.querySelector('#p1-enter-bootloader').disabled && !document.querySelector('#p1-preparation-cancel').hidden && document.querySelector('#flash').textContent === 'Flash'")) throw new Error('Preparation must lock competing actions without claiming a firmware flash.');
+  await js("document.querySelector('#p1-preparation-cancel').click(); window.resolveP1Chooser([])");
+  await until("!document.querySelector('#p1-load-recovery').disabled && document.querySelector('#p1-preparation-cancel').hidden", 3000);
+  if (!await js("document.querySelector('#p1-preparation-status').textContent.includes('No bootloader selected')")) throw new Error('Empty chooser must leave a retryable status.');
+}
+
 async function scenario(name, query, { reselect, file = img, source = img, profile = 'ascent-air', unlock = false, bootstrap = false }) {
   console.log(`--- ${name}`);
   await connectedPage(query);
   if (profile === 'fpvos-p1-air') {
-    const kit = await js("document.querySelector('#p1-preparation-download')?.getAttribute('href')");
-    if (kit !== 'assets/p1-updater/p1-stock-preparation-v1.zip' || !PUBLIC_ASSETS.has(kit)) throw new Error('P1 preparation download is not linked from the page.');
+    if (!await js("document.querySelector('#p1-enter-bootloader') && document.querySelector('#p1-load-recovery') && !document.querySelector('#p1-preparation-download')")) throw new Error('P1 browser preparation controls are missing.');
+    if (!await js("document.querySelector('#p1-enter-bootloader').disabled && document.querySelector('#p1-load-recovery').disabled")) throw new Error('Stock preparation must be disabled while connected.');
   }
   await chooseFile(file);
   await until("!document.querySelector('#file-info').hidden && /[0-9a-f]{32}/.test(document.querySelector('#file-meta').innerText)", 30000, 'image parsed');
@@ -252,8 +268,8 @@ try {
     const response = await fetch(`${base}${name}`);
     if (!response.ok) throw new Error(`Missing public asset: ${name}`);
     const data = Buffer.from(await response.arrayBuffer());
-    if (name === 'assets/p1-updater/p1-stock-preparation-v1.zip'
-      && !data.equals(fs.readFileSync(path.join(root, name)))) throw new Error('P1 preparation download differs from the packaged kit.');
+    if (name.startsWith('assets/p1-updater/browser-v1/')
+      && !data.equals(fs.readFileSync(path.join(root, name)))) throw new Error('P1 recovery asset differs from the repository.');
   }
   for (const name of ['test/fake-serial.js', 'test/browser-harness.mjs', 'transports/node-serial.mjs', '.git/config']) {
     if ((await fetch(`${base}${name}`)).status !== 404) throw new Error(`Private asset served: ${name}`);
@@ -261,6 +277,7 @@ try {
   await cdp('Page.addScriptToEvaluateOnNewDocument', {
     source: `window.__fake = { regrant: !location.search.includes('regrant=0') };\n${fake}`,
   });
+  await p1PreparationControls();
   failures.push(...await scenario('kept', '?fw=17_5_3', { reselect: false }));
   failures.push(...await scenario('zip', '', { reselect: false, file: zip }));
   failures.push(...await scenario('xz', '', { reselect: false, file: xzFile }));

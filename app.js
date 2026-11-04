@@ -23,7 +23,8 @@ const state = {
   connecting: false,
   image: null,       // { file, bytes, parsed, md5 }
   operation: null,
-  get busy() { return this.operation !== null; },
+  preparing: false,
+  get busy() { return this.operation !== null || this.preparing; },
   flashed: null,     // result line after a flash
 };
 
@@ -152,6 +153,37 @@ function setUnitStatus(kind, text) {
   const s = $('unit-status');
   s.dataset.kind = kind;
   s.querySelector('span').textContent = text;
+}
+
+// Stock P1 uses Web Serial to enter U-Boot, then WebHID for RAM recovery.
+// Each chooser must run directly from its own user gesture after re-enumeration.
+let preparationAbort = null;
+async function prepareP1(loadRecovery) {
+  if (state.busy || state.connecting || state.link || !$('p1-stock-confirm').checked) return;
+  const preparation = getProfile('fpvos-p1-air').meta.preparation;
+  state.preparing = true;
+  preparationAbort = new AbortController();
+  const signal = preparationAbort.signal;
+  const progress = (text) => { $('p1-preparation-status').textContent = text; };
+  render();
+  try {
+    if (loadRecovery) {
+      const [device] = await navigator.hid.requestDevice({ filters: [preparation.hidFilter] });
+      if (!device) { progress('No bootloader selected. Select the same P1 when it appears as USB download gadget.'); return; }
+      await preparation.loadRecovery(device, { signal, progress, log });
+      progress('Recovery boot requested. Wait for USB to reconnect, then click Connect above and select the P1 Air serial port. Choose your P1 .fwu file and click Flash.');
+      log('P1 recovery loaded through WebHID; connect its new serial port to install firmware.');
+    } else {
+      const port = await navigator.serial.requestPort({ filters: [preparation.serialFilter] });
+      await preparation.enterBootloader(port, { signal });
+      progress('Restart requested. Wait for USB download gadget, then select it with “Load P1 recovery”. If it stays as Sirius, allow stock firmware to finish starting and retry Restart stock P1.');
+      log('Requested stock P1 USB bootloader through Web Serial.');
+    }
+  } catch (e) {
+    const message = e.name === 'NotFoundError' ? 'No device selected. You can try again.'
+      : `${e.message} If the P1 is still in USB download mode, retry Load P1 recovery; power-cycle it to return to its installed firmware.`;
+    progress(message); log(`P1 preparation: ${message}`, 'warn');
+  } finally { state.preparing = false; preparationAbort = null; render(); }
 }
 
 // --------------------------------------------------------------- firmware --
@@ -305,6 +337,13 @@ function render() {
   $('disconnect').disabled = state.busy || state.connecting;
   $('netmode').disabled = !state.session || !state.profile?.transport.protocol.networkMode || state.busy || state.connecting;
   $('profile').disabled = state.busy;
+  const p1Available = supported && 'hid' in navigator;
+  $('p1-browser-support').hidden = p1Available;
+  $('p1-stock-confirm').disabled = state.busy;
+  for (const id of ['p1-enter-bootloader', 'p1-load-recovery']) {
+    $(id).disabled = !p1Available || !$('p1-stock-confirm').checked || state.busy || state.connecting || !!state.link;
+  }
+  $('p1-preparation-cancel').hidden = !state.preparing;
   const unlockFeature = state.profile?.meta.unlock ?? state.selectedProfile?.meta.unlock;
   $('unlock-options').hidden = !unlockFeature;
   $('unlock-before-flash').disabled = state.busy || !plan.unlockAvailable;
@@ -366,9 +405,9 @@ function render() {
 
   // flash
   $('flash').disabled = !canFlash();
-  $('flash').textContent = state.busy ? 'Flashing…' : plan.unlockSelected ? 'Unlock and flash' : 'Flash';
-  $('cancel').hidden = !state.busy || !['unlock', 'clean', 'upload'].includes(currentStage);
-  $('progress').hidden = !state.busy && !state.flashed;
+  $('flash').textContent = state.operation ? 'Flashing…' : plan.unlockSelected ? 'Unlock and flash' : 'Flash';
+  $('cancel').hidden = !state.operation || !['unlock', 'clean', 'upload'].includes(currentStage);
+  $('progress').hidden = !state.operation && !state.flashed;
   $('result').hidden = !state.flashed;
   if (state.flashed) {
     $('result').dataset.ok = state.flashed.ok;
@@ -406,6 +445,10 @@ function init() {
   if (!('serial' in navigator)) return;
 
   $('connect').onclick = connect;
+  $('p1-stock-confirm').onchange = render;
+  $('p1-enter-bootloader').onclick = () => prepareP1(false);
+  $('p1-load-recovery').onclick = () => prepareP1(true);
+  $('p1-preparation-cancel').onclick = () => preparationAbort?.abort();
   $('disconnect').onclick = disconnect;
   $('netmode').onclick = networkMode;
   $('reselect').onclick = reselect;
