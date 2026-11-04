@@ -2,7 +2,7 @@
 import { LinkLostError } from './transports/ascent.js';
 import { WebSerialLink } from './transports/web-serial.js';
 import {
-  PROFILES, USB_FILTERS, getProfile, profileForUsb, profileForDevice,
+  PROFILES, USB_FILTERS, CONNECT_FILTERS, getProfile, profileForUsb, profileForDevice, preparationForUsb,
 } from './devices/index.js';
 import { prepareFirmware, evaluateSelection, flashFirmware } from './flasher.js';
 import { formatBytes } from './devices/common.js';
@@ -22,6 +22,7 @@ const state = {
   profile: null,     // positively identified connected hardware, never a UI override
   selectedProfile: null, // optional image/archive target while disconnected
   unlockOverride: null, // null = version-based automatic selection; boolean = manual choice
+  p1Stage: null,     // stock P1 preparation: null | 'restart' (step 1 next) | 'recovery' (step 2 next) | 'done'
   connecting: false,
   image: null,       // { file, bytes, parsed, md5 }
   operation: null,
@@ -59,10 +60,13 @@ function logText() {
 async function connect() {
   let port;
   try {
-    port = await navigator.serial.requestPort({ filters: USB_FILTERS });
+    port = await navigator.serial.requestPort({ filters: CONNECT_FILTERS });
   } catch {
     return;   // chooser closed
   }
+  // A stock unit that must be prepared first (the P1 on its Sirius port) is not
+  // yet an fpvOS device, so it cannot just be opened: hand it to preparation.
+  if (!isOurs(port) && preparationForUsb(port.getInfo())) { await beginP1Preparation(port); return; }
   await openPort(port);
 }
 
@@ -162,10 +166,29 @@ function setUnitStatus(kind, text) {
   s.querySelector('span').textContent = text;
 }
 
+// Reached only from a Connect click where the chosen port is a stock P1 (its
+// Sirius serial id), never from auto-open on plug. Confirm, then run the first
+// step with the port we already have, so the restart needs no second chooser.
+async function beginP1Preparation(port) {
+  if (state.busy || state.connecting || state.link) return;
+  const ok = await ask('Stock BETAFPV P1 Air',
+    'Prepare this unit in the browser and install fpvOS? Supported: a standard P1 Air on stock firmware 1.0.44, '
+    + 'kept on external power throughout. Other stock versions and P1 AIO models are not supported. '
+    + 'Nothing is written to flash yet; the bootloader is checked first.',
+    'Prepare');
+  if (!ok) return;
+  $('p1-preparation').open = true;
+  $('p1-stock-confirm').checked = true;
+  state.p1Stage = 'restart';
+  render();
+  await prepareP1(false, port);
+}
+
 // Stock P1 uses Web Serial to enter U-Boot, then WebHID for RAM recovery.
-// Each chooser must run directly from its own user gesture after re-enumeration.
+// Each chooser must run directly from its own user gesture after re-enumeration;
+// the restart can reuse the port Connect already picked (presetPort).
 let preparationAbort = null;
-async function prepareP1(loadRecovery) {
+async function prepareP1(loadRecovery, presetPort = null) {
   if (state.busy || state.connecting || state.link || !$('p1-stock-confirm').checked) return;
   const preparation = getProfile('fpvos-p1-air').meta.preparation;
   state.preparing = true;
@@ -178,11 +201,13 @@ async function prepareP1(loadRecovery) {
       const [device] = await navigator.hid.requestDevice({ filters: [preparation.hidFilter] });
       if (!device) { progress('No bootloader selected. Select the same P1 when it appears as USB download gadget.'); return; }
       await preparation.loadRecovery(device, { signal, progress, log });
+      state.p1Stage = 'done';
       progress('Recovery boot requested. Wait for USB to reconnect, then click Connect above and select the P1 Air serial port. Choose your P1 .fwu file and click Flash.');
       log('P1 recovery loaded through WebHID; connect its new serial port to install firmware.');
     } else {
-      const port = await navigator.serial.requestPort({ filters: [preparation.serialFilter] });
+      const port = presetPort ?? await navigator.serial.requestPort({ filters: [preparation.serialFilter] });
       await preparation.enterBootloader(port, { signal });
+      state.p1Stage = 'recovery';
       progress('Restart requested. Wait for USB download gadget, then select it with “Load P1 recovery”. If it stays as Sirius, allow stock firmware to finish starting and retry Restart stock P1.');
       log('Requested stock P1 USB bootloader through Web Serial.');
     }
@@ -347,9 +372,11 @@ function render() {
   const p1Available = supported && 'hid' in navigator;
   $('p1-browser-support').hidden = p1Available;
   $('p1-stock-confirm').disabled = state.busy;
-  for (const id of ['p1-enter-bootloader', 'p1-load-recovery']) {
-    $(id).disabled = !p1Available || !$('p1-stock-confirm').checked || state.busy || state.connecting || !!state.link;
-  }
+  // Walk the two steps: exactly one is the lit, clickable action; the finished
+  // step is greyed and ticked, and the later step stays blocked until its turn.
+  const p1Ready = p1Available && $('p1-stock-confirm').checked && !state.busy && !state.connecting && !state.link;
+  setP1Step($('p1-enter-bootloader'), p1Ready && state.p1Stage === 'restart', state.p1Stage === 'recovery' || state.p1Stage === 'done');
+  setP1Step($('p1-load-recovery'), p1Ready && state.p1Stage === 'recovery', state.p1Stage === 'done');
   $('p1-preparation-cancel').hidden = !state.preparing;
   const unlockFeature = state.profile?.meta.unlock ?? state.selectedProfile?.meta.unlock;
   $('unlock-options').hidden = !unlockFeature;
@@ -436,10 +463,17 @@ function el(tag, text, cls) {
   return e;
 }
 
+// A preparation step is either the lit next action (enabled, lemon green),
+// finished (greyed and ticked), or still blocked (plain greyed, not yet).
+function setP1Step(btn, active, done) {
+  btn.disabled = !active;
+  btn.classList.toggle('step-active', active);
+  btn.classList.toggle('step-done', !active && done);
+}
+
 // ------------------------------------------------------------------ wiring --
 
 function init() {
-  $('devices').replaceChildren(...PROFILES.flatMap((p) => p.meta.models).map((m) => el('li', m)));
   for (const p of PROFILES) {
     const option = el('option', p.meta.name); option.value = p.meta.id;
     $('profile').append(option);
@@ -454,7 +488,10 @@ function init() {
   if (!('serial' in navigator)) return;
 
   $('connect').onclick = connect;
-  $('p1-stock-confirm').onchange = render;
+  $('p1-stock-confirm').onchange = () => {
+    state.p1Stage = $('p1-stock-confirm').checked ? (state.p1Stage ?? 'restart') : null;
+    render();
+  };
   $('p1-enter-bootloader').onclick = () => prepareP1(false);
   $('p1-load-recovery').onclick = () => prepareP1(true);
   $('p1-preparation-cancel').onclick = () => preparationAbort?.abort();

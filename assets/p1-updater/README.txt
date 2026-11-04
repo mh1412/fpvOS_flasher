@@ -46,8 +46,8 @@ repeatedly flash unverified images. This does not recover damaged SPL/U-Boot.
 
 Source and assets
 -----------------
-Kernel and DTB: https://github.com/mh1412/fpvOS
-Commit: e32ea69aac26fec989a8a7f48419356846702d41
+Kernel and DTB: https://github.com/gehee/fpvOS
+Commit: 5c55cfb039d30568a56726d96a917ceb1ed36546
 Build: ./build.sh p1-air-source
 Files: output/p1-air-source/images/kernel.img and betafpv-p1-air.dtb
 The kernel embeds the independent fpvos-recovery root and P1 updater.

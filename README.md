@@ -22,11 +22,9 @@ anything is sent, and the device does the flashing itself.
 
 | Device | Images | Status |
 | --- | --- | --- |
-| Ascent Lite air unit | `Ascent_H_Sky_*.img`, stock or fpvOS | **flashed on real hardware** (the fpvOS beta3 air image, 2026-10-08; a user-confirmed stock upgrade 17.5.3 → 18.21.10); also tested against a simulated unit, in Node and in headless Chrome |
-| Ascent Lite+ air unit | `Ascent_H_Sky_*.img`, stock or fpvOS | as the Lite: the same image and updater; **not yet on a Lite+** |
-| Ascent VRX (standard, Proxima-9311) | `Ascent_G_Gnd_*.img`, signed stock ASW/OTRA | hardware-tested upgrades through 18.21.10 and unlocked downgrade to 17.5.8 |
-| fpvOS AR9311 on standard VRX | full `.fwu` install or original kernel/DTB restoration bundle | recovery-service path; simulated tests only |
-| BETAFPV P1 Air | full `fpvos-p1-air.fwu` from `p1-air-source` | browser preparation from stock 1.0.44; installs and updates through fpvOS recovery |
+| Ascent Lite / Lite+ | `Ascent_H_Sky_*.img`, stock or fpvOS | **flashed on real hardware** (the fpvOS beta3 air image, 2026-10-08; a user-confirmed stock upgrade 17.5.3 → 18.21.10); the Lite+ uses the same image and updater but is **not yet hardware-tested**; also tested on a simulated unit, in Node and in headless Chrome |
+| Ascent VRX (standard, Proxima-9311) | `Ascent_G_Gnd_*.img` signed stock, or a full `.fwu` for fpvOS | hardware-tested stock upgrades through 18.21.10 and unlocked downgrade to 17.5.8; the fpvOS install and stock-restore use the AR9311 recovery service (simulated tests only) |
+| BETAFPV P1 Air | full `fpvos-p1-air.fwu` from `p1-air-source` | **flashed on real hardware** (stock 1.0.44 → fpvOS through this page, 2026-11-03); browser preparation from stock 1.0.44, then installs and updates through fpvOS recovery |
 
 **VRX Pro, Avatar, L_Gnd and goggles are not supported profiles.** The standard
 VRX uses board **5 / G_Gnd**.
@@ -59,11 +57,14 @@ signed-stock path is unchanged. The stock-kernel/root-only
 
 ### BETAFPV P1 Air
 
-For **stock P1_SKY v1.0 / firmware 1.0.44.rel**, expand “Installing fpvOS on a
-stock BETAFPV P1?” in the Device panel. Confirm the supported model/version,
-then use **Restart stock P1** to select its Sirius serial port. After it restarts,
-use **Load P1 recovery** to select that same unit as **USB download gadget**.
-If it is already in USB download mode, start with Load P1 recovery.
+For **stock P1_SKY v1.0 / firmware 1.0.44.rel**, click **Connect** and pick the
+P1's Sirius serial port: the flasher recognises a stock P1 and offers to prepare
+it, starting the restart for you. (You can also expand “Installing fpvOS on a
+stock BETAFPV P1?” in the Device panel and run the steps by hand.) After it
+restarts, use **Load P1 recovery** to select that same unit as **USB download
+gadget**. If the unit is stuck in USB download mode from an earlier try,
+power-cycle it back to stock and start again from Connect. Once fpvOS is
+installed, Connect reaches the unit directly.
 
 The page downloads hash-pinned recovery assets, checks the known bootloader,
 uploads them to RAM through WebHID and verifies their device-side CRCs before
@@ -92,7 +93,7 @@ This profile supports unsigned development bundles for the P1_SKY 1.0.44 NAND
 layout. The firmware updater preserves stock bank 1, factory calibration and
 user settings. Stock P1 images and VRX restoration bundles are not accepted.
 The browser stock-preparation path is currently qualified on Linux only. See the
-[P1 firmware installation and recovery instructions](https://github.com/mh1412/fpvOS/blob/p1-air-support/br-external/board/p1-air/README.md#persistent-installation-and-usb-recovery)
+[P1 firmware installation and recovery instructions](https://github.com/gehee/fpvOS/blob/main/br-external/board/p1-air/README.md#persistent-installation-and-usb-recovery)
 for the stock recovery command and firmware details. Keep verified
 device backups and recovery access.
 
@@ -230,16 +231,31 @@ Keep local firmware fixtures and hardware-test output under `.local/`, which
 is ignored by Git.
 
 `.github/workflows/pages.yml` runs the Node and simulated-browser checks on
-every push to `main` and every pull request. It publishes the commit the `live`
-tag points to (without `test/` or `tools/`) to GitHub Pages, so `main` can move
-on without changing the page:
+every push to `main` and every pull request. It publishes to GitHub Pages
+(without `test/` or `tools/`) the commit the `live` tag points to, at the root,
+and the commit the `preview` tag points to, at `/preview/`, so `main` can move
+on without changing either page:
 
 ```bash
 git tag -f live COMMIT && git push -f origin live
 ```
 
-A commit whose workflow has no `live` trigger (an older one, a fork's pull
-request) is published by hand after moving the tag:
+```bash
+git tag -f preview COMMIT && git push -f origin preview
+```
+
+Every deploy rebuilds both, so pushing one tag keeps the other. Deleting the tag
+takes `/preview/` down:
+
+```bash
+git push origin --delete preview
+```
+
+The preview shares the live page's origin, so it also shares its Web Serial and
+WebHID permissions and its saved settings.
+
+A commit whose workflow lacks these triggers (an older one, a fork's pull
+request) is published by hand after moving a tag:
 
 ```bash
 gh workflow run pages.yml --ref main

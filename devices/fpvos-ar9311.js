@@ -1,4 +1,10 @@
-// New-kernel Gnd485 recovery service; not the stock-kernel root-only profile.
+// The standard Ascent VRX (AR9311, Gnd485) talking to the fpvOS update service
+// (USB 1d6b:0104) on fpvOS's own kernel; not the stock-kernel root-only profile.
+// fpvOS need not be installed first: from stock firmware, an fpvOS .fwu picked
+// for the Ascent VRX profile uploads the RAM updater (stages/ar9311-bootstrap.js)
+// and continues here; a VRX running fpvOS serves the same service (inittab).
+// It installs a full fpvOS bundle or restores the original kernel/DTB.
+// The VRX Pro (RK3568) would need a profile of its own; none is written yet.
 import { ASCENT_TRANSPORT, ASCENT_PROTOCOL } from '../transports/ascent.js';
 import { defineDevice } from './common.js';
 import { FPVOS_PREPARE, FPVOS_TRANSFER, FPVOS_INSTALL, FPVOS_REBOOT_VERIFY } from '../stages/fpvos.js';

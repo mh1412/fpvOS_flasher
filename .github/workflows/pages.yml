@@ -1,31 +1,37 @@
 name: pages
 
-# Tests every push to main and every pull request. Publishes the commit the
-# `live` tag points to (index.html, application modules, assets and fonts; not
-# the tests) to GitHub Pages, which serves it over https as Web Serial needs, so
-# main can move on without changing the page. To publish a commit:
+# Tests every push to main and every pull request. Publishes to GitHub Pages,
+# which serves it over https as Web Serial needs, the commit the `live` tag
+# points to at the root, and the commit the `preview` tag points to at
+# /preview/ (index.html, application modules, assets and fonts; not the tests).
+# main moves on without changing either page. Every deploy rebuilds both, so a
+# push of one tag keeps the other; deleting `preview` takes /preview/ down.
 #   git tag -f live <commit> && git push -f origin live
+#   git tag -f preview <commit> && git push -f origin preview
+#   git push origin --delete preview
 # A tag push runs this file as it is in the tagged commit: a commit without
-# the `live` trigger (an older one, a fork's pull request) is published by hand:
+# these triggers (an older one, a fork's pull request) is published by hand:
 #   gh workflow run pages.yml --ref main
 # One-time setup: Settings > Pages > Build and deployment > Source: GitHub Actions;
 # Settings > Environments > github-pages > Deployment branches and tags: main and
-# the tag `live`.
+# the tags `live` and `preview`.
 
 on:
   push:
     branches: [main]
-    tags: [live]
+    tags: [live, preview]
   pull_request:
   workflow_dispatch:
+  delete:
 
 permissions:
   contents: read
 
 jobs:
   test:
-    # a run by hand publishes `live` as it is: its tests may differ from main's
-    if: github.event_name != 'workflow_dispatch'
+    # a run by hand or a tag deletion publishes the tags as they are: their
+    # tests may differ from main's
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -40,8 +46,9 @@ jobs:
         run: node test/browser-check.mjs
 
   deploy:
-    # a push of `live` once its tests pass, or a run by hand (test skipped)
-    if: ${{ !failure() && !cancelled() && (github.ref == 'refs/tags/live' || github.event_name == 'workflow_dispatch') }}
+    # a push of `live` or `preview` once its tests pass, a run by hand, or the
+    # deletion of `preview` (test skipped)
+    if: ${{ !failure() && !cancelled() && (github.ref == 'refs/tags/live' || github.ref == 'refs/tags/preview' || github.event_name == 'workflow_dispatch' || (github.event_name == 'delete' && github.event.ref_type == 'tag' && github.event.ref == 'preview')) }}
     needs: test
     runs-on: ubuntu-24.04
     permissions:
@@ -58,21 +65,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: refs/tags/live
+          fetch-depth: 0   # every tag, so live and preview are both at hand
       - name: Site
-        # every tracked file but the tests, docs, tools and repository files, so
-        # the step fits whatever layout the tagged commit has
+        # every tracked file of each tagged commit but the tests, docs, tools and
+        # repository files, so the step fits whatever layout that commit has; a
+        # commit carrying tools/version-site.py gets per-commit module URLs
         run: |
-          mkdir -p _site
-          git archive HEAD | tar -x -C _site
-          cd _site
-          rm -rf .github test docs tools .gitignore .gitattributes README.md LICENSE
-          find . -name '*.mjs' -delete
-      - name: Version application modules and recovery assets
-        # the tagged commit, not $GITHUB_SHA: a run by hand runs on main
-        run: |
-          if [ -f tools/version-site.py ]; then
-            python3 tools/version-site.py _site "$(git rev-parse HEAD)"
+          publish() {   # ref, directory
+            mkdir -p "$2"
+            git archive "$1" | tar -x -C "$2"
+            (cd "$2" && rm -rf .github test docs tools .gitignore .gitattributes README.md LICENSE \
+              && find . -name '*.mjs' -delete)
+            if git cat-file -e "$1:tools/version-site.py" 2>/dev/null; then
+              git show "$1:tools/version-site.py" > "$RUNNER_TEMP/version-site.py"
+              python3 "$RUNNER_TEMP/version-site.py" "$2" "$(git rev-parse "$1^{commit}")"
+            fi
+          }
+          publish refs/tags/live _site
+          if git rev-parse -q --verify refs/tags/preview >/dev/null; then
+            publish refs/tags/preview _site/preview
           fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

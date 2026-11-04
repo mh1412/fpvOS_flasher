@@ -14,6 +14,7 @@
   const installFailure = params.has('installFailure');
   const VID = type === 'air' ? 0x1d76 : 0x1d75;
   let custom = type === 'fpvos' || type === 'p1';
+  const stockP1 = type === 'p1stock';   // a stock P1 on its Sirius serial port, not yet fpvOS
   const name = type === 'air' ? 'Ascent_H_Sky' : type === 'vrx' ? 'Ascent_VRX' : 'Ascent_VRX_Pro';
   const factory = { name, serial: 'FAKE0001', hardware: type === 'air' ? 'FPV-Ascent-Sky-482-V1.3-1.0'
     : type === 'vrx' ? 'FPV-Ascent-Gnd-485-V1.2-1.0' : 'HW_V1.0' };
@@ -35,7 +36,10 @@
   class FakePort extends EventTarget {
     constructor(dev) { super(); this.dev = dev; this.readable = null; this.writable = null; }
 
-    getInfo() { return this.dev.custom ? { usbVendorId: 0x1d6b, usbProductId: 0x0104 } : { usbVendorId: VID, usbProductId: 0x0101 }; }
+    getInfo() {
+      if (this.dev.stockP1) return { usbVendorId: 0x1d6b, usbProductId: 0x0101 };
+      return this.dev.custom ? { usbVendorId: 0x1d6b, usbProductId: 0x0104 } : { usbVendorId: VID, usbProductId: 0x0101 };
+    }
 
     async open() {
       if (!this.dev.present || this.dev.port !== this) throw new DOMException('Failed to open serial port.', 'NetworkError');
@@ -66,6 +70,7 @@
     constructor(mode) {
       this.mode = mode;
       this.custom = custom;
+      this.stockP1 = stockP1;
       this.present = true;
       this.port = new FakePort(this);
       this.parser = null;
@@ -85,6 +90,9 @@
     }
 
     receive(bytes) {
+      // A stock P1 speaks U-Boot's raw USB protocol, not our frames: capture the
+      // restart command enterP1Bootloader writes, the way detection relies on.
+      if (this.stockP1) { fake.p1RebootRaw = Array.from(bytes); return; }
       this.parser = this.parser || new A.FrameParser({ maxPayload: 4 << 20 });
       for (const f of this.parser.push(bytes)) {
         fake.log.push(`${this.mode} ${A.cmdName(f.cmd)} seq ${f.seq} crc ${f.crcOk}`);

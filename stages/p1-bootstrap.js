@@ -2,7 +2,7 @@
 import { P1HidRecovery, P1_RAM_FILES, sha256 } from '../transports/p1-hid.js';
 export { enterP1Bootloader, P1_STOCK_USB, P1_HID_FILTER } from '../transports/p1-hid.js';
 export const P1_RECOVERY_BASE = new URL('../assets/p1-updater/browser-v1/', import.meta.url);
-export const P1_RECOVERY_MANIFEST_SHA256 = '0f83fd66bb9f462bb1ccc70bbaaf75741417a5a862ef55915dbb4952080c6fca';
+export const P1_RECOVERY_MANIFEST_SHA256 = '7053edab9ff1910051d9b6dce1dab3b0b923092f74f25179eb8dbb140284fbb1';
 async function fetchBytes(name, limit, fetcher, signal) {
   const response = await fetcher(new URL(name, P1_RECOVERY_BASE), { signal, cache: 'no-store' });
   if (!response.ok) throw new Error(`Cannot load P1 recovery ${name}: HTTP ${response.status}.`);

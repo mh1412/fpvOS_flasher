@@ -1,5 +1,9 @@
 // Profile-specific one-shot RAM version overlay, using the stock clean script
 // hook. Only staged text is uploaded; no FileEnd is sent until the real image.
+// Ascent VRX only: the Ascent VRX profile is the only one with an unlock, and
+// canUnlockVrx() requires Ascent_VRX with Ascent_G_Gnd firmware. Tested on the
+// Ascent VRX alone; other AR9311 stock ground units (P1 goggles) would need
+// their own profile and testing.
 import { uploadUnfinalized, rebootIntoUpdateMode } from '../transports/ascent.js';
 import { ASCENT_ENTER_UPDATE } from './ascent.js';
 

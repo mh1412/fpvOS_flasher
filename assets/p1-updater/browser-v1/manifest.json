@@ -3,8 +3,8 @@
   "version": "browser-v1",
   "board": "p1-air",
   "board_id": 1345409867,
-  "source": "https://github.com/mh1412/fpvOS",
-  "source_commit": "e32ea69aac26fec989a8a7f48419356846702d41",
+  "source": "https://github.com/gehee/fpvOS",
+  "source_commit": "5c55cfb039d30568a56726d96a917ceb1ed36546",
   "build_config": "p1air_source_defconfig",
   "supported_stock_firmware": [
     "1.0.44.rel"
@@ -33,8 +33,8 @@
   ],
   "files": {
     "kernel.img": {
-      "size": 5294080,
-      "sha256": "361736b3949ac03b87b43926508768a071da182f61543cc51ccd9f8ff2785a1c",
+      "size": 5294336,
+      "sha256": "74904ec018ee74097199d17839dd668716d9cf32fbaa450ab4139ee9d4fdfae9",
       "address": 608174080
     },
     "betafpv-p1-air.dtb": {

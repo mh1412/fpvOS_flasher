@@ -79,6 +79,12 @@
   button.solid { background: var(--accent); border-color: var(--accent); color: var(--ground); }
   button.solid:hover:not(:disabled) { color: var(--ground); filter: brightness(1.08); }
   button:disabled { opacity: 0.35; cursor: not-allowed; }
+  /* P1 preparation steps: the next action is lit lemon green; a finished step is
+     greyed and ticked; a step not yet reached keeps the faint :disabled look. */
+  #p1-preparation button.step-active { background: var(--accent); border-color: var(--accent); color: var(--ground); opacity: 1; }
+  #p1-preparation button.step-active:hover:not(:disabled) { filter: brightness(1.08); }
+  #p1-preparation button.step-done { opacity: 1; border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: color-mix(in srgb, var(--accent) 65%, var(--quiet)); }
+  #p1-preparation button.step-done::after { content: " ✓"; }
   button.link { border: none; padding: 0; color: var(--accent); font-size: 12px; }
   :focus-visible { outline: 2px solid var(--data); outline-offset: 2px; }
 
@@ -235,7 +241,7 @@
 
 <main>
   <p class="lead">Flash firmware to FPV devices over USB, straight from the browser.</p>
-  <div class="supported"><span class="label">SUPPORTED</span><ul id="devices"></ul></div>
+  <div class="supported"><span class="label">SUPPORTED</span><ul id="devices"><li>Ascent Lite / Lite+</li><li>Ascent VRX</li><li>BETAFPV P1 Air</li></ul></div>
 
   <div class="experimental" role="note">
     <strong>Experimental</strong>
@@ -258,18 +264,21 @@
     <dl id="unit-info" hidden></dl>
     <details id="p1-preparation">
       <summary>Installing fpvOS on a stock BETAFPV P1?</summary>
-      <p>Let the stock P1 finish starting after power-on. Prepare it directly in this browser, then install your P1 <code>.fwu</code>
-        firmware. Keep external power connected and disconnect other Artosyn devices.</p>
+      <p>Let the stock P1 finish starting after power-on, then click <strong>Connect</strong> above and pick its
+        Sirius port: the flasher recognises a stock P1 and starts the restart below for you. You can also run the
+        steps by hand here. Keep external power connected and disconnect other Artosyn devices.</p>
       <p>The same P1 appears as a serial port, a USB bootloader, then a recovery serial
-        port. Your browser asks for permission for each USB mode.</p>
+        port. Your browser asks for permission for each USB mode. Once fpvOS is installed, Connect reaches it
+        directly and this panel is not needed again.</p>
       <p><label><input id="p1-stock-confirm" type="checkbox">
         This is a standard P1 Air with stock firmware 1.0.44. Other stock versions
         and P1 AIO models are not supported.</label></p>
       <p><button id="p1-enter-bootloader">1. Restart stock P1</button>
         Select its Sirius serial port.</p>
       <p><button id="p1-load-recovery">2. Load P1 recovery</button>
-        Select the same P1, now called USB download gadget. If it is already in this
-        mode, start here.</p>
+        Select the same P1, now called USB download gadget.</p>
+      <p>Stuck in USB download mode from an earlier try? Power-cycle the P1 to return it to
+        stock, then start again from Connect.</p>
       <p id="p1-browser-support" hidden>Stock preparation requires desktop Chrome or Edge
         with Web Serial and WebHID.</p>
       <p id="p1-preparation-status" role="status" aria-live="polite">After recovery starts,

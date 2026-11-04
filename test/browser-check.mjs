@@ -32,19 +32,55 @@ async function connectedPage(query = '') {
 }
 
 async function p1PreparationControls() {
-  console.log('--- P1 preparation permissions and cancellation');
-  await connectedPage('?device=p1');
-  await js("document.querySelector('#disconnect').click()");
-  await until("!document.querySelector('#connect').hidden", 5000);
-  if (!await js("document.querySelector('#p1-load-recovery').disabled")) throw new Error('Stock version confirmation is required.');
+  console.log('--- P1 preparation steps, permissions and cancellation');
+  await cdp('Page.navigate', { url: `${base}?device=p1stock` });
+  await until("document.readyState === 'complete' && !document.querySelector('#connect').hidden", 10000, 'stock page');
+  await js("document.querySelector('#p1-preparation').open = true");
+  // before confirmation both steps are blocked
+  if (!await js("document.querySelector('#p1-enter-bootloader').disabled && document.querySelector('#p1-load-recovery').disabled")) throw new Error('Stock version confirmation is required.');
   await js("document.querySelector('#p1-stock-confirm').click()");
-  await until("!document.querySelector('#p1-load-recovery').disabled", 3000);
+  // step 1 is the lit next action; step 2 stays blocked until step 1 has run
+  await until("!document.querySelector('#p1-enter-bootloader').disabled && document.querySelector('#p1-enter-bootloader').classList.contains('step-active')", 3000, 'step 1 lit');
+  if (!await js("document.querySelector('#p1-load-recovery').disabled && !document.querySelector('#p1-load-recovery').classList.contains('step-active')")) throw new Error('Step 2 must stay blocked until step 1 has run.');
+  // run step 1 (restart) by hand
+  await js("document.querySelector('#p1-enter-bootloader').click()");
+  await until("Array.isArray(window.__fake.p1RebootRaw) && document.querySelector('#p1-preparation-cancel').hidden", 5000, 'step 1 done');
+  // step 1 greyed and ticked, step 2 now the lit action
+  if (!await js("document.querySelector('#p1-enter-bootloader').disabled && document.querySelector('#p1-enter-bootloader').classList.contains('step-done')")) throw new Error('Finished step 1 must be greyed and marked done.');
+  if (!await js("!document.querySelector('#p1-load-recovery').disabled && document.querySelector('#p1-load-recovery').classList.contains('step-active')")) throw new Error('Step 2 must unblock as the lit action once step 1 has run.');
+  // step 2 chooser locks competing actions; cancelling leaves a retryable status
   await js(`navigator.hid.requestDevice = () => new Promise(resolve => { window.resolveP1Chooser = resolve; });
     document.querySelector('#p1-load-recovery').click();`);
   if (!await js("document.querySelector('#connect').disabled && document.querySelector('#p1-enter-bootloader').disabled && !document.querySelector('#p1-preparation-cancel').hidden && document.querySelector('#flash').textContent === 'Flash'")) throw new Error('Preparation must lock competing actions without claiming a firmware flash.');
   await js("document.querySelector('#p1-preparation-cancel').click(); window.resolveP1Chooser([])");
   await until("!document.querySelector('#p1-load-recovery').disabled && document.querySelector('#p1-preparation-cancel').hidden", 3000);
   if (!await js("document.querySelector('#p1-preparation-status').textContent.includes('No bootloader selected')")) throw new Error('Empty chooser must leave a retryable status.');
+}
+
+async function p1StockDetection() {
+  console.log('--- P1 stock detection from Connect');
+  await cdp('Page.navigate', { url: `${base}?device=p1stock` });
+  await until("document.readyState === 'complete' && !document.querySelector('#connect').hidden", 10000, 'stock page');
+  const fail = [];
+  // a stock P1 is offered by Connect but must not auto-connect as a device
+  if (!await js("document.querySelector('#unit-info').hidden")) fail.push('stock P1 auto-connected as a device');
+  await js("document.querySelector('#connect').click()");
+  await until("document.querySelector('#ask').open", 3000, 'stock P1 prepare confirm');
+  if (!await js("/stock firmware 1\\.0\\.44/.test(document.querySelector('#ask-text').textContent)")) fail.push('stock P1 confirm lacks the supported-version scope');
+  await shot('p1-stock-confirm');
+  await js("document.querySelector('#ask-ok').click()");
+  await until("Array.isArray(window.__fake.p1RebootRaw)", 5000, 'restart sent');
+  const raw = String(await js("window.__fake.p1RebootRaw"));
+  if (raw !== String([0xaa, 5, 0, 0x1d, 0, 0, 0xcc, 0xeb, 0xaa])) fail.push(`wrong P1 restart bytes: ${raw}`);
+  await until("document.querySelector('#p1-preparation-cancel').hidden", 5000, 'restart finished');
+  if (!await js("document.querySelector('#p1-preparation').open")) fail.push('preparation panel did not open');
+  if (!await js("document.querySelector('#p1-stock-confirm').checked")) fail.push('stock confirm not set from Connect');
+  if (!await js("/Load P1 recovery|download gadget/.test(document.querySelector('#p1-preparation-status').textContent)")) fail.push('did not guide to the recovery step');
+  if (await js("document.querySelector('#p1-load-recovery').disabled")) fail.push('Load P1 recovery not enabled after restart');
+  if (!await js("document.querySelector('#p1-enter-bootloader').disabled && document.querySelector('#p1-enter-bootloader').classList.contains('step-done')")) fail.push('step 1 not greyed/ticked after the auto restart');
+  if (!await js("document.querySelector('#p1-load-recovery').classList.contains('step-active')")) fail.push('step 2 not lit as the next action');
+  await shot('p1-stock-detection');
+  return fail;
 }
 
 async function scenario(name, query, { reselect, file = img, source = img, profile = 'ascent-air', unlock = false, bootstrap = false }) {
@@ -278,6 +314,7 @@ try {
     source: `window.__fake = { regrant: !location.search.includes('regrant=0') };\n${fake}`,
   });
   await p1PreparationControls();
+  failures.push(...await p1StockDetection());
   failures.push(...await scenario('kept', '?fw=17_5_3', { reselect: false }));
   failures.push(...await scenario('zip', '', { reselect: false, file: zip }));
   failures.push(...await scenario('xz', '', { reselect: false, file: xzFile }));
