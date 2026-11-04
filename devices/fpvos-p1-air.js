@@ -17,7 +17,7 @@ export const matchesFpvosP1Air = (info) => info.name === 'fpvOS updater'
 export const FPVOS_P1_AIR = defineDevice({
   meta: {
     id: 'fpvos-p1-air', name: 'BETAFPV P1 Air · fpvOS',
-    models: ['BETAFPV P1 Air · Stock 1.0.44', 'BETAFPV P1 Air · fpvOS'],
+    models: ['BETAFPV P1 Air · Stock', 'BETAFPV P1 Air · fpvOS'],
     usb: [{ usbVendorId: 0x1d6b, usbProductId: 0x0104 }],
     deviceVersion: () => null,
     preparation: Object.freeze({ enterBootloader: enterP1Bootloader, loadRecovery: prepareP1Recovery,

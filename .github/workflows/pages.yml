@@ -51,6 +51,8 @@ jobs:
           cp index.html *.js _site/
           cp -r devices stages fonts assets _site/
           cp transports/*.js _site/transports/
+      - name: Version application modules and recovery assets
+        run: python3 tools/version-site.py _site "$GITHUB_SHA"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
