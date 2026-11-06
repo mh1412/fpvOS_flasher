@@ -136,7 +136,7 @@ acknowledge a serial reboot without restarting, so manual recovery can be needed
 
 ## AR9311 fpvOS recovery service
 
-Stock P1 1.0.44 uses a nine-byte serial bootloader-entry protocol, not Ascent's
+Supported stock P1 1.x/2.x firmware uses a nine-byte serial bootloader-entry protocol, not Ascent's
 file staging protocol. Its profile owns a `preparation` policy; the Device panel
 uses that policy for separate Web Serial and WebHID chooser gestures. Preparation
 locks normal connection/flashing controls and has its own cancellation state.
@@ -153,14 +153,20 @@ RAM-only protocol adaptation makes replies fit input report 4, with at most
 and the user's explicit stock-version selection restrict entry, followed by
 four bootloader instruction fingerprints and the complete dispatch table before
 any command callback or image upload is allowed. Unknown builds stop and require
-a power cycle; the adaptation does not persist. It is not general P1 support.
+a power cycle; the adaptation does not persist. The version selector is mandatory:
+1.0.44 uses the v1 layout; 2.0.5, 2.0.6 and 2.1.2 use the verified v2 layout.
+There is no automatic probing of alternate addresses or fallback to another
+layout. Future versions and other P1 models are not implicitly supported.
 
 A temporary command callback, also read back, runs only generated CRC checks
 and the fixed RAM boot command. All three images need successful device CRCs
 before boot. The pinned recovery kernel includes its own root; a small external
 initramfs overrides `/init` to force recovery even if an older fpvOS root exists.
 `tools/package-p1-recovery.py --check` verifies this deterministic override against
-its supplied source. Existing NAND installation policy remains in the updater.
+its supplied source. NAND installation policy remains in the updater. The bundled source patch
+allows either valid environment/U-Boot bank selection and preserves those
+selections; exactly one member of each pair must be active. Firmware bank 1,
+factory calibration and user settings remain protected.
 Cancellation, transfer errors and failed verification never trigger boot/flash;
 retry preparation or power-cycle the unit. Linux HID permissions can be needed.
 Windows/macOS HID behavior is not yet qualified.

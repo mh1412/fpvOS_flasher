@@ -39,6 +39,10 @@ async function p1PreparationControls() {
   // before confirmation both steps are blocked
   if (!await js("document.querySelector('#p1-enter-bootloader').disabled && document.querySelector('#p1-load-recovery').disabled")) throw new Error('Stock version confirmation is required.');
   await js("document.querySelector('#p1-stock-confirm').click()");
+  if (!await js("document.querySelector('#p1-enter-bootloader').disabled && document.querySelector('#p1-load-recovery').disabled")) throw new Error('An explicit stock version selection is required.');
+  await js("const s=document.querySelector('#p1-stock-version');s.value='2.1.2';s.dispatchEvent(new Event('change'))");
+  if (!await js("!document.querySelector('#p1-stock-confirm').checked && document.querySelector('#p1-load-recovery').disabled")) throw new Error('Changing the stock version must require confirmation again.');
+  await js("document.querySelector('#p1-stock-confirm').click()");
   // step 1 is the lit next action; step 2 stays blocked until step 1 has run
   await until("!document.querySelector('#p1-enter-bootloader').disabled && document.querySelector('#p1-enter-bootloader').classList.contains('step-active')", 3000, 'step 1 lit');
   if (!await js("document.querySelector('#p1-load-recovery').disabled && !document.querySelector('#p1-load-recovery').classList.contains('step-active')")) throw new Error('Step 2 must stay blocked until step 1 has run.');
@@ -51,7 +55,7 @@ async function p1PreparationControls() {
   // step 2 chooser locks competing actions; cancelling leaves a retryable status
   await js(`navigator.hid.requestDevice = () => new Promise(resolve => { window.resolveP1Chooser = resolve; });
     document.querySelector('#p1-load-recovery').click();`);
-  if (!await js("document.querySelector('#connect').disabled && document.querySelector('#p1-enter-bootloader').disabled && !document.querySelector('#p1-preparation-cancel').hidden && document.querySelector('#flash').textContent === 'Flash'")) throw new Error('Preparation must lock competing actions without claiming a firmware flash.');
+  if (!await js("document.querySelector('#connect').disabled && document.querySelector('#p1-enter-bootloader').disabled && document.querySelector('#p1-stock-version').disabled && !document.querySelector('#p1-preparation-cancel').hidden && document.querySelector('#flash').textContent === 'Flash'")) throw new Error('Preparation must lock competing actions without claiming a firmware flash.');
   await js("document.querySelector('#p1-preparation-cancel').click(); window.resolveP1Chooser([])");
   await until("!document.querySelector('#p1-load-recovery').disabled && document.querySelector('#p1-preparation-cancel').hidden", 3000);
   if (!await js("document.querySelector('#p1-preparation-status').textContent.includes('No bootloader selected')")) throw new Error('Empty chooser must leave a retryable status.');
@@ -65,8 +69,11 @@ async function p1StockDetection() {
   // a stock P1 is offered by Connect but must not auto-connect as a device
   if (!await js("document.querySelector('#unit-info').hidden")) fail.push('stock P1 auto-connected as a device');
   await js("document.querySelector('#connect').click()");
+  await until("document.querySelector('#p1-preparation').open", 3000, 'stock version selection');
+  if (await js("!!window.__fake.p1RebootRaw || document.querySelector('#ask').open")) fail.push('Connect must not infer a stock version or reboot before selection');
+  await js("const s=document.querySelector('#p1-stock-version');s.value='2.1.2';s.dispatchEvent(new Event('change'));document.querySelector('#connect').click()");
   await until("document.querySelector('#ask').open", 3000, 'stock P1 prepare confirm');
-  if (!await js("/stock firmware 1\\.0\\.44/.test(document.querySelector('#ask-text').textContent)")) fail.push('stock P1 confirm lacks the supported-version scope');
+  if (!await js("/stock firmware 2\\.1\\.2/.test(document.querySelector('#ask-text').textContent)")) fail.push('stock P1 confirm lacks the supported-version scope');
   await shot('p1-stock-confirm');
   await js("document.querySelector('#ask-ok').click()");
   await until("Array.isArray(window.__fake.p1RebootRaw)", 5000, 'restart sent');

@@ -171,8 +171,15 @@ function setUnitStatus(kind, text) {
 // step with the port we already have, so the restart needs no second chooser.
 async function beginP1Preparation(port) {
   if (state.busy || state.connecting || state.link) return;
+  const stockVersion = $('p1-stock-version').value;
+  if (!getProfile('fpvos-p1-air').meta.preparation.stockVersions.includes(stockVersion)) {
+    $('p1-preparation').open = true;
+    $('p1-preparation-status').textContent = 'Select the installed stock version, then click Connect again or confirm the model and use Restart stock P1.';
+    $('p1-stock-version').focus();
+    return;
+  }
   const ok = await ask('Stock BETAFPV P1 Air',
-    'Prepare this unit in the browser and install fpvOS? Supported: a standard P1 Air on stock firmware 1.0.44, '
+    `Prepare this unit in the browser and install fpvOS? Confirm this is a standard P1 Air on stock firmware ${stockVersion}, `
     + 'kept on external power throughout. Other stock versions and P1 AIO models are not supported. '
     + 'Nothing is written to flash yet; the bootloader is checked first.',
     'Prepare');
@@ -191,6 +198,8 @@ let preparationAbort = null;
 async function prepareP1(loadRecovery, presetPort = null) {
   if (state.busy || state.connecting || state.link || !$('p1-stock-confirm').checked) return;
   const preparation = getProfile('fpvos-p1-air').meta.preparation;
+  const stockVersion = $('p1-stock-version').value;
+  if (!preparation.stockVersions.includes(stockVersion)) return;
   state.preparing = true;
   preparationAbort = new AbortController();
   const signal = preparationAbort.signal;
@@ -200,7 +209,7 @@ async function prepareP1(loadRecovery, presetPort = null) {
     if (loadRecovery) {
       const [device] = await navigator.hid.requestDevice({ filters: [preparation.hidFilter] });
       if (!device) { progress('No bootloader selected. Select the same P1 when it appears as USB download gadget.'); return; }
-      await preparation.loadRecovery(device, { signal, progress, log });
+      await preparation.loadRecovery(device, { stockVersion, signal, progress, log });
       state.p1Stage = 'done';
       progress('Recovery boot requested. Wait for USB to reconnect, then click Connect above and select the P1 Air serial port. Choose your P1 .fwu file and click Flash.');
       log('P1 recovery loaded through WebHID; connect its new serial port to install firmware.');
@@ -374,7 +383,9 @@ function render() {
   $('p1-stock-confirm').disabled = state.busy;
   // Walk the two steps: exactly one is the lit, clickable action; the finished
   // step is greyed and ticked, and the later step stays blocked until its turn.
-  const p1Ready = p1Available && $('p1-stock-confirm').checked && !state.busy && !state.connecting && !state.link;
+  $('p1-stock-version').disabled = state.busy || state.connecting || !!state.link;
+  const p1VersionSelected = getProfile('fpvos-p1-air').meta.preparation.stockVersions.includes($('p1-stock-version').value);
+  const p1Ready = p1VersionSelected && p1Available && $('p1-stock-confirm').checked && !state.busy && !state.connecting && !state.link;
   setP1Step($('p1-enter-bootloader'), p1Ready && state.p1Stage === 'restart', state.p1Stage === 'recovery' || state.p1Stage === 'done');
   setP1Step($('p1-load-recovery'), p1Ready && state.p1Stage === 'recovery', state.p1Stage === 'done');
   $('p1-preparation-cancel').hidden = !state.preparing;
@@ -474,6 +485,10 @@ function setP1Step(btn, active, done) {
 // ------------------------------------------------------------------ wiring --
 
 function init() {
+  for (const version of getProfile('fpvos-p1-air').meta.preparation.stockVersions) {
+    const option = el('option', version); option.value = version;
+    $('p1-stock-version').append(option);
+  }
   for (const p of PROFILES) {
     const option = el('option', p.meta.name); option.value = p.meta.id;
     $('profile').append(option);
@@ -490,6 +505,11 @@ function init() {
   $('connect').onclick = connect;
   $('p1-stock-confirm').onchange = () => {
     state.p1Stage = $('p1-stock-confirm').checked ? (state.p1Stage ?? 'restart') : null;
+    render();
+  };
+  $('p1-stock-version').onchange = () => {
+    $('p1-stock-confirm').checked = false;
+    state.p1Stage = null;
     render();
   };
   $('p1-enter-bootloader').onclick = () => prepareP1(false);

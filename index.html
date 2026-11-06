@@ -265,14 +265,19 @@
     <details id="p1-preparation">
       <summary>Installing fpvOS on a stock BETAFPV P1?</summary>
       <p>Let the stock P1 finish starting after power-on, then click <strong>Connect</strong> above and pick its
-        Sirius port: the flasher recognises a stock P1 and starts the restart below for you. You can also run the
+        Sirius port: the flasher recognises a stock P1 and guides preparation. Select its installed stock version below first. You can also run the
         steps by hand here. Keep external power connected and disconnect other Artosyn devices.</p>
       <p>The same P1 appears as a serial port, a USB bootloader, then a recovery serial
         port. Your browser asks for permission for each USB mode. Once fpvOS is installed, Connect reaches it
         directly and this panel is not needed again.</p>
+      <p><label for="p1-stock-version">Installed stock firmware</label>
+        <select id="p1-stock-version"><option value="">Select your stock version</option></select></p>
       <p><label><input id="p1-stock-confirm" type="checkbox">
-        This is a standard P1 Air with stock firmware 1.0.44. Other stock versions
-        and P1 AIO models are not supported.</label></p>
+        This is a standard P1 Air running the selected stock version. I checked
+        the version before starting. Other versions and P1 AIO models are not supported.</label></p>
+      <p>Do not guess the version: stock 1.x and 2.x require different bootloader preparation.
+        Modified units with mismatched stock and bootloader versions are not supported.
+        Stock 2.x also requires a P1 firmware build with stock 2.x support; older P1 bundles are incompatible.</p>
       <p><button id="p1-enter-bootloader">1. Restart stock P1</button>
         Select its Sirius serial port.</p>
       <p><button id="p1-load-recovery">2. Load P1 recovery</button>
@@ -370,7 +375,7 @@
         Persistent application changes may be replaced. VRX Pro and Avatar images need different profiles.</p>
       <p><b>BETAFPV P1 Air · Stock / fpvOS:</b> select a full P1 <code>.fwu</code> bundle.
         The unit enters clean recovery, installs and verifies the image, then reboots.
-        Keep external power connected. For initial installation from stock 1.0.44,
+        Keep external power connected. For initial installation from supported stock firmware,
         use the browser preparation controls in the Device panel first. Stock images and VRX bundles
         are not supported by this profile.</p>
       <p>Close the vendor's PC tool and any serial terminal first: only one program can use the port.</p>

@@ -10,7 +10,7 @@ export const PUBLIC_ASSETS = new Set(['index.html', 'app.js', 'flasher.js', 'fir
   'stages/ascent.js', 'stages/vrx-unlock.js', 'stages/fpvos.js', 'stages/ar9311-bootstrap.js', 'stages/p1-bootstrap.js', 'transports/p1-hid.js', 'transports/ascent.js', 'transports/web-serial.js',
   'assets/ar9311-updater/v3/manifest.json', 'assets/ar9311-updater/v3/fpvos-update-ar9311',
   'assets/ar9311-updater/v3/bootstrap.sh', 'assets/ar9311-updater/COPYING',
-  'assets/p1-updater/browser-v1/manifest.json', 'assets/p1-updater/browser-v1/kernel.img', 'assets/p1-updater/browser-v1/betafpv-p1-air.dtb', 'assets/p1-updater/browser-v1/recovery-initrd.img', 'assets/p1-updater/README.txt', 'assets/p1-updater/COPYING',
+  'assets/p1-updater/browser-v1/manifest.json', 'assets/p1-updater/browser-v1/source.patch', 'assets/p1-updater/browser-v1/kernel.img', 'assets/p1-updater/browser-v1/betafpv-p1-air.dtb', 'assets/p1-updater/browser-v1/recovery-initrd.img', 'assets/p1-updater/README.txt', 'assets/p1-updater/COPYING',
   'archive.js', 'xz.js', 'checksum.js', 'fonts/ChakraPetch-Medium.ttf', 'fonts/ChakraPetch-SemiBold.ttf']);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

@@ -7,34 +7,15 @@
   "source_commit": "5c55cfb039d30568a56726d96a917ceb1ed36546",
   "build_config": "p1air_source_defconfig",
   "supported_stock_firmware": [
-    "1.0.44.rel"
-  ],
-  "bootloader_fingerprints": [
-    {
-      "address": 804808584,
-      "size": 64,
-      "sha256": "8d64ac5d0fbbab044f2669df89f474bd4264515027e58d387e256e1ea9a5e700"
-    },
-    {
-      "address": 804809040,
-      "size": 64,
-      "sha256": "873222ba22f63c746288b66083ee88421c941cfdd2dc335532c42b1c2077a788"
-    },
-    {
-      "address": 804675224,
-      "size": 64,
-      "sha256": "d5e7caa635ba5af4b785d0e665f8ddeccadd6c2f7e3afaa483725954a328992e"
-    },
-    {
-      "address": 804805456,
-      "size": 64,
-      "sha256": "fa1863401a64e73cb609ac67db1e64163a8998c6d83c7672557afcec67709910"
-    }
+    "1.0.44.rel",
+    "2.0.5.rel",
+    "2.0.6.rel",
+    "2.1.2.rel"
   ],
   "files": {
     "kernel.img": {
-      "size": 5294336,
-      "sha256": "74904ec018ee74097199d17839dd668716d9cf32fbaa450ab4139ee9d4fdfae9",
+      "size": 5294848,
+      "sha256": "13418cfd0b508fef3abdbd68539c6e452d162a0531935ffe2cc1067c31ef2445",
       "address": 608174080
     },
     "betafpv-p1-air.dtb": {
@@ -47,5 +28,60 @@
       "sha256": "46e3972df53c49ccb32cfe7806ea1920c083b83f2b99387ef4739c6804fa66df",
       "address": 637534208
     }
+  },
+  "bootloaders": {
+    "v1": {
+      "fingerprints": [
+        {
+          "address": 804808584,
+          "size": 64,
+          "sha256": "8d64ac5d0fbbab044f2669df89f474bd4264515027e58d387e256e1ea9a5e700"
+        },
+        {
+          "address": 804809040,
+          "size": 64,
+          "sha256": "873222ba22f63c746288b66083ee88421c941cfdd2dc335532c42b1c2077a788"
+        },
+        {
+          "address": 804675224,
+          "size": 64,
+          "sha256": "d5e7caa635ba5af4b785d0e665f8ddeccadd6c2f7e3afaa483725954a328992e"
+        },
+        {
+          "address": 804805456,
+          "size": 64,
+          "sha256": "fa1863401a64e73cb609ac67db1e64163a8998c6d83c7672557afcec67709910"
+        }
+      ]
+    },
+    "v2": {
+      "fingerprints": [
+        {
+          "address": 803757016,
+          "size": 64,
+          "sha256": "3f059998c3d1b2f6088ef74287b05398519601401bacc14515d73c91c856eaee"
+        },
+        {
+          "address": 803757472,
+          "size": 64,
+          "sha256": "fb5c0b1747f7e78003f92bba2591dd13b1437cf81a4d2c0b68f52d7fbd394065"
+        },
+        {
+          "address": 803623384,
+          "size": 64,
+          "sha256": "d5e7caa635ba5af4b785d0e665f8ddeccadd6c2f7e3afaa483725954a328992e"
+        },
+        {
+          "address": 803753888,
+          "size": 64,
+          "sha256": "fa1863401a64e73cb609ac67db1e64163a8998c6d83c7672557afcec67709910"
+        }
+      ]
+    }
+  },
+  "source_patch": {
+    "file": "source.patch",
+    "sha256": "1be4b719a46563d0abdf9b5fabfd50340c05362d1e26c71f055c9fe293908919",
+    "size": 4084
   }
 }

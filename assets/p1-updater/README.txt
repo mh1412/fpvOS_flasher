@@ -1,19 +1,26 @@
-P1 browser recovery — stock 1.0.44
+P1 browser recovery — supported stock firmware
 ================================
 
 Use desktop Chrome/Edge over HTTPS or localhost. Tested on Linux Chromium;
-Windows/macOS and other stock firmware versions are not yet qualified.
+Windows/macOS are not yet qualified. Supported stock versions: 1.0.44, 2.0.5,
+2.0.6 and 2.1.2. Unknown/future 2.x versions are not implicitly supported.
+End-to-end hardware tests cover 1.0.44 and 2.1.2; 2.0.5/2.0.6 have offline
+bootloader checks only. The newly rebuilt recovery still needs a repeat
+hardware test after incorporating upstream installer fixes. Automatic detection
+and units with mismatched stock/U-Boot versions remain unresolved.
 Standard P1 Air only: not P1 AIO, Matrix, goggles or Ascent hardware.
 
 1. Connect USB and external power and let stock firmware finish starting.
    Disconnect other Artosyn devices.
 2. In the flasher's Device panel, expand the stock P1 instructions and confirm
-   that the unit is a standard P1 Air running stock 1.0.44.
+   the standard P1 Air model and select its exact installed stock version.
+   Do not guess: stock 1.x and 2.x use different bootloader RAM addresses.
 3. Click Restart stock P1 and select its Sirius serial port.
 4. Wait for USB to reconnect. Click Load P1 recovery and select the same unit,
    now called USB download gadget. Already in this mode? Start at this step.
 5. When recovery starts, click Connect and select the P1 Air serial port. Choose a
-   valid fpvos-p1-air.fwu file and click Flash. Keep power connected until
+   valid fpvos-p1-air.fwu file and click Flash. Stock 2.x requires a firmware
+   build including the source patch below, not an older P1 bundle. Keep power connected until
    installation and the reboot verification finish.
 
 These are different USB identities of ONE physical P1. Browser permissions are
@@ -48,13 +55,16 @@ Source and assets
 -----------------
 Kernel and DTB: https://github.com/gehee/fpvOS
 Commit: 5c55cfb039d30568a56726d96a917ceb1ed36546
+Source changes: apply browser-v1/source.patch to that commit first.
+The patch SHA-256 and size are recorded in manifest.json. It permits either
+valid environment/U-Boot bank selection without changing those selections.
 Build: ./build.sh p1-air-source
 Files: output/p1-air-source/images/kernel.img and betafpv-p1-air.dtb
 The kernel embeds the independent fpvos-recovery root and P1 updater.
 
 browser-v1/manifest.json pins exact sizes, SHA-256 hashes, RAM destinations and
 supported bootloader fingerprints. The flasher pins the manifest hash too.
-The 1.0.44 bootloader RAM layout is deliberately version-specific. A one-byte
+Bootloader RAM layouts are deliberately version-specific (v1 and v2). A one-byte
 protocol adaptation is necessary before readable bootloader identification;
 all later callback/image writes require matching fingerprints and dispatch data.
 No proprietary bootloader code is distributed or flashed by this page.

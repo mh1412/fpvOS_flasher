@@ -1,0 +1,64 @@
+diff --git a/br-external/package/fpvos-update/backends/p1-air/layout.h b/br-external/package/fpvos-update/backends/p1-air/layout.h
+index 5f129db..dfb7a0c 100644
+--- a/br-external/package/fpvos-update/backends/p1-air/layout.h
++++ b/br-external/package/fpvos-update/backends/p1-air/layout.h
+@@ -25,7 +25,7 @@ static inline int p1_layout(const unsigned char records[2][AR9311_GPT_BYTES], un
+         {"userapp0",0x1700000,0x2d00000,0}, {"userapp1",0x4400000,0x2d00000,1},
+         {"usr_data",0x7100000,0x600000,1}, {"usr_log",0x7700000,0x600000,1}
+     };
+-    unsigned found = 0, active_group[3] = {0};
++    unsigned found = 0, active_group[3] = {0}, boot_group[2] = {0};
+     for (unsigned i = 0; i < 128; i++) {
+         const unsigned char *e = records[selected] + 1024 + 128*i;
+         unsigned nonzero = 0;
+@@ -41,14 +41,18 @@ static inline int p1_layout(const unsigned char records[2][AR9311_GPT_BYTES], un
+             if (strcmp(name, expected[j].name)) continue;
+             if ((found & (1U<<j)) || fpvos_get_le64(e+32) != expected[j].start/512 ||
+                 fpvos_get_le64(e+40) != (expected[j].start+expected[j].size)/512-1 ||
+-                (j < 6 || j > 11 ? fpvos_get_le64(e+48) != (expected[j].active ? 1ULL<<47 : 0) : (fpvos_get_le64(e+48) & ~(1ULL<<47)) != 0)) return 0;
++                (j < 2 || j > 11 ? fpvos_get_le64(e+48) != (expected[j].active ? 1ULL<<47 : 0) : (fpvos_get_le64(e+48) & ~(1ULL<<47)) != 0)) return 0;
++            /* Stock updates can select either environment/U-Boot copy. Require
++             * exactly one of each, but preserve those selections unchanged. */
++            if (j >= 2 && j <= 5 && fpvos_get_le64(e+48)) boot_group[(j-2)/2] |= 1U << ((j-2)%2);
+             if (j >= 6 && j <= 11 && fpvos_get_le64(e+48)) active_group[(j-6)/2] |= 1U << ((j-6)%2);
+             found |= 1U<<j;
+             break;
+         }
+         if (j == sizeof(expected)/sizeof(expected[0])) return 0;
+     }
+-    if (found != (1U<<14)-1 || (active_group[0] != 1 && active_group[0] != 2) ||
++    if (found != (1U<<14)-1 || (boot_group[0] != 1 && boot_group[0] != 2) ||
++        (boot_group[1] != 1 && boot_group[1] != 2) || (active_group[0] != 1 && active_group[0] != 2) ||
+         active_group[0] != active_group[1] || active_group[0] != active_group[2]) return 0;
+     if (record) *record = selected;
+     if (bank) *bank = active_group[0] == 2;
+diff --git a/tools/fpvos-update/tests/test_p1.py b/tools/fpvos-update/tests/test_p1.py
+index 1429c43..236aa47 100644
+--- a/tools/fpvos-update/tests/test_p1.py
++++ b/tools/fpvos-update/tests/test_p1.py
+@@ -124,6 +124,25 @@ class P1Tests(unittest.TestCase):
+         self.assertEqual(end[:0x40000],after[:0x40000])
+         self.assertEqual(end[0x40400:0x44400],before[0x40400:0x44400])
+ 
++    def test_stock_bootloader_selections_are_validated_and_preserved(self):
++        for env_bank in (0,1):
++            for uboot_bank in (0,1):
++                parts=list(PARTS)
++                for start,bank in ((2,env_bank),(4,uboot_bank)):
++                    for n in (0,1):
++                        parts[start+n]=(*parts[start+n][:3],int(n==bank))
++                original=record(parts=parts)
++                self.assertTrue(self.layout(b'\xff'*0x4400,original))
++                d=self.flash_directory()
++                data=bytearray((d/'boot-state').read_bytes());data[0x40000:0x44400]=original
++                (d/'boot-state').write_bytes(data)
++                self.assertEqual(self.flash(d,'select',0),0)
++                after=(d/'boot-state').read_bytes()
++                self.assertEqual(after[1024+2*128:1024+6*128],original[1024+2*128:1024+6*128])
++                self.assertEqual(self.flash(d,'select',1),0)
++                final=(d/'boot-state').read_bytes()
++                self.assertEqual(final[0x40000+1024+2*128:0x40000+1024+6*128],original[1024+2*128:1024+6*128])
++
+     def test_torn_gpt_keeps_previous_record_and_can_retry(self):
+         # 1: torn write, 3: wrong byte read back, 4: erase fails,
+         # 5: the new record reads back with an uncorrectable ECC error.

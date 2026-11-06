@@ -24,7 +24,7 @@ anything is sent, and the device does the flashing itself.
 | --- | --- | --- |
 | Ascent Lite / Lite+ | `Ascent_H_Sky_*.img`, stock or fpvOS | **flashed on real hardware** (the fpvOS beta3 air image, 2026-10-08; a user-confirmed stock upgrade 17.5.3 → 18.21.10); the Lite+ uses the same image and updater but is **not yet hardware-tested**; also tested on a simulated unit, in Node and in headless Chrome |
 | Ascent VRX (standard, Proxima-9311) | `Ascent_G_Gnd_*.img` signed stock, or a full `.fwu` for fpvOS | hardware-tested stock upgrades through 18.21.10 and unlocked downgrade to 17.5.8; the fpvOS install and stock-restore use the AR9311 recovery service (simulated tests only) |
-| BETAFPV P1 Air | full `fpvos-p1-air.fwu` from `p1-air-source` | **flashed on real hardware** (stock 1.0.44 → fpvOS through this page, 2026-11-03); browser preparation from stock 1.0.44, then installs and updates through fpvOS recovery |
+| BETAFPV P1 Air | full `fpvos-p1-air.fwu` from `p1-air-source` | **flashed on real hardware** (stock 1.0.44 → fpvOS through this page, 2026-11-03); browser preparation from supported stock 1.x/2.x, then installs and updates through fpvOS recovery |
 
 **VRX Pro, Avatar, L_Gnd and goggles are not supported profiles.** The standard
 VRX uses board **5 / G_Gnd**.
@@ -57,7 +57,8 @@ signed-stock path is unchanged. The stock-kernel/root-only
 
 ### BETAFPV P1 Air
 
-For **stock P1_SKY v1.0 / firmware 1.0.44.rel**, click **Connect** and pick the
+For **standard P1_SKY / stock 1.0.44, 2.0.5, 2.0.6 or 2.1.2**, first select
+the installed stock version in the preparation panel, then click **Connect** and pick the
 P1's Sirius serial port: the flasher recognises a stock P1 and offers to prepare
 it, starting the restart for you. (You can also expand “Installing fpvOS on a
 stock BETAFPV P1?” in the Device panel and run the steps by hand.) After it
@@ -72,12 +73,22 @@ booting independent recovery. It does not flash the bootloader. No Linux
 preparation helper, SSH or USB networking is used. Each USB mode requires its
 own browser permission. Keep external power connected throughout.
 
-This path has been tested on Linux Chromium with stock 1.0.44. Windows/macOS
-and other stock versions are not yet qualified. Linux may require a USB/HID
+The preparation and installation path was hardware-tested on Linux Chromium
+with stock 1.0.44 and 2.1.2. The recovery rebuilt on the latest upstream fixes
+still needs a repeat hardware test. The 2.x path uses a separate bootloader layout; 2.0.5, 2.0.6 and 2.1.2 share the checked
+handler fingerprints; 2.0.5 and 2.0.6 have been checked offline, not flashed
+on hardware. Automatic bootloader detection is unresolved: the selector assumes
+stock firmware and U-Boot are a matched vendor pair. Modified or mixed-bank
+units are not qualified for this preparation flow. Unlisted versions are rejected; this is not a promise of
+support for future 2.x releases. Windows/macOS are not yet qualified. Linux may require a USB/HID
 permission rule; see the [setup and recovery guide](assets/p1-updater/README.txt).
 
 Once recovery starts, select the **P1 Air** serial port
 in the browser and select `fpvos-p1-air.fwu` from the fpvOS `p1-air-source` build.
+For stock 2.x, use a P1 firmware build including the environment/U-Boot bank
+selection fix in [source.patch](assets/p1-updater/browser-v1/source.patch); older
+P1 bundles can reject the v2 boot layout. Rebuild the firmware after applying
+that patch to the source revision in the recovery guide.
 An already-installed fpvOS unit can connect directly without stock preparation. The page
 enters clean recovery, validates and transfers the full kernel/DTB/rootfs bundle,
 waits for device-side installation and readback, then reboots and checks the
@@ -89,7 +100,7 @@ cannot permit cross-flashing. Reconnection checks the updater identity before
 continuing. If several matching ports are available, select the same physical
 unit when prompted.
 
-This profile supports unsigned development bundles for the P1_SKY 1.0.44 NAND
+This profile supports unsigned development bundles for the standard P1_SKY NAND
 layout. The firmware updater preserves stock bank 1, factory calibration and
 user settings. Stock P1 images and VRX restoration bundles are not accepted.
 The browser stock-preparation path is currently qualified on Linux only. See the

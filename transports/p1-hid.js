@@ -1,13 +1,28 @@
-// P1 1.0.44 U-Boot RAM transport. No NAND/flash commands are exposed.
+// Version-specific P1 U-Boot RAM transport. No NAND/flash commands are exposed.
 import { crc32 } from '../checksum.js';
 export const P1_STOCK_USB = Object.freeze({ usbVendorId: 0x1d6b, usbProductId: 0x0101 });
 export const P1_HID_FILTER = Object.freeze({ vendorId: 0x1d6b, productId: 0x0100, usagePage: 0xff00, usage: 1 });
 const MAGIC = Uint8Array.of(4, 85, 255, 170, 65, 82, 84, 79);
-const MAGIC_ADDRESS = 0x2ffbf378, TABLE = 0x2ffbf290, CALLBACK = 0x2ffbf330, COMMAND = 0x2ff65e98;
+const layouts = {
+  v1: { magic: 0x2ffbf378, table: 0x2ffbf290, callback: 0x2ffbf330, command: 0x2ff65e98,
+    callbacks: [0x2ff86448, 0, 0, 0, 0x2ff86788, 0x2ff86950, 0],
+    fingerprints: [0x2ff86788, 0x2ff86950, 0x2ff65e98, 0x2ff85b50] },
+  v2: { magic: 0x2febebd0, table: 0x2febeae8, callback: 0x2febeb88, command: 0x2fe651d8,
+    callbacks: [0x2fe85898, 0, 0, 0, 0x2fe85bd8, 0x2fe85da0, 0],
+    fingerprints: [0x2fe85bd8, 0x2fe85da0, 0x2fe651d8, 0x2fe84fa0] },
+};
+for (const layout of Object.values(layouts)) {
+  Object.freeze(layout.callbacks); Object.freeze(layout.fingerprints); Object.freeze(layout);
+}
+const versions = Object.freeze({ '1.0.44': 'v1', '2.0.5': 'v2', '2.0.6': 'v2', '2.1.2': 'v2' });
+export const P1_STOCK_VERSIONS = Object.freeze(Object.keys(versions));
+export function p1Bootloader(stockVersion) {
+  if (!Object.hasOwn(versions, stockVersion)) throw new Error('Select a supported stock P1 firmware version.');
+  const id = versions[stockVersion]; return { id, layout: layouts[id] };
+}
 const SCRATCH = 0x24bff000;
 export const P1_RAM_FILES = Object.freeze({ 'kernel.img': [0x24400000, 6291456],
   'betafpv-p1-air.dtb': [0x22080000, 65536], 'recovery-initrd.img': [0x26000000, 65536] });
-const FINGERPRINTS = [0x2ff86788, 0x2ff86950, COMMAND, 0x2ff85b50];
 const equal = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 export const sha256 = async (bytes) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((n) => n.toString(16).padStart(2, '0')).join('');
 function cancelled(signal) { if (signal?.aborted) throw new Error('Preparation cancelled. Power-cycle the P1 before reconnecting.'); }
@@ -43,7 +58,8 @@ function setup(tag, count, address) {
   p.set(new TextEncoder().encode(tag)); v.setUint32(4, count, true); v.setBigUint64(8, BigInt(address), true); return p;
 }
 export class P1HidRecovery {
-  constructor(device, { signal, progress = () => {}, log = () => {}, readTimeout = 3000 } = {}) {
+  constructor(device, { stockVersion = '1.0.44', signal, progress = () => {}, log = () => {}, readTimeout = 3000 } = {}) {
+    this.layout = p1Bootloader(stockVersion).layout; this.stockVersion = stockVersion;
     this.device = device; this.signal = signal; this.progress = progress; this.log = log; this.readTimeout = readTimeout;
     this.verified = false; this.commands = false; this.loaded = new Set(); this.pending = null;
     this.onReport = (e) => {
@@ -77,6 +93,7 @@ export class P1HidRecovery {
     await deadline(this.device.sendReport(first, p.subarray(1)), 5000, 'P1 USB transfer timed out. Power-cycle and retry preparation.');
   }
   readable(address, size) {
+    const { table: TABLE, magic: MAGIC_ADDRESS, fingerprints: FINGERPRINTS } = this.layout;
     return Number.isInteger(address) && Number.isInteger(size) && size > 0 && (
       address >= TABLE && address + size <= MAGIC_ADDRESS + 8
       || FINGERPRINTS.some((a) => address >= a && address + size <= a + 64)
@@ -109,9 +126,13 @@ export class P1HidRecovery {
     return data;
   }
   async identify(fingerprints) {
+    const { table: TABLE, magic: MAGIC_ADDRESS, callback: CALLBACK, command: COMMAND, fingerprints: FINGERPRINTS } = this.layout;
+    if (!Array.isArray(fingerprints) || fingerprints.length !== FINGERPRINTS.length
+      || fingerprints.some((f, i) => f.address !== FINGERPRINTS[i] || f.size !== 64 || !/^[a-f0-9]{64}$/.test(f.sha256))) throw new Error('Invalid bootloader fingerprint policy.');
     // A fixed, one-byte RAM-only probe is necessary before Linux HID can deliver
     // replies. It changes a protocol constant, never an instruction or NAND.
-    // Unknown firmware must not reach callback installation or image upload.
+    // The user must choose the installed stock version before this probe; never
+    // try another layout automatically. Fingerprints gate all subsequent writes.
     let adapted = false;
     try { adapted = equal(await this.read(MAGIC_ADDRESS, 8, 350), MAGIC); } catch (e) { cancelled(this.signal); }
     if (!adapted) {
@@ -119,15 +140,14 @@ export class P1HidRecovery {
       await this.send(4, Uint8Array.of(4), 255);
       if (!equal(await this.read(MAGIC_ADDRESS, 8), MAGIC)) throw new Error('Unsupported P1 bootloader. Power-cycle the unit.');
     }
-    if (fingerprints.length !== FINGERPRINTS.length || fingerprints.some((f, i) => f.address !== FINGERPRINTS[i] || f.size !== 64)) throw new Error('Invalid bootloader fingerprint policy.');
     for (const f of fingerprints) {
-      if (await sha256(await this.read(f.address, f.size)) !== f.sha256) throw new Error('Unsupported P1 bootloader version. Only stock 1.0.44 is supported; no firmware was written. Power-cycle the unit.');
+      if (await sha256(await this.read(f.address, f.size)) !== f.sha256) throw new Error(`Unsupported P1 bootloader version for stock ${this.stockVersion}; no firmware was written. Power-cycle the unit and check its stock version.`);
     }
     const table = await this.read(TABLE, 168), v = new DataView(table.buffer);
     for (let i = 0; i < 7; i++) {
       const expectedKind = i >= 4 ? i : 0;
       const pointer = v.getBigUint64(i * 24 + 16, true);
-      const expected = [0x2ff86448, 0, 0, 0, 0x2ff86788, 0x2ff86950, 0][i];
+      const expected = this.layout.callbacks[i];
       if (v.getBigUint64(i * 24, true) !== BigInt(expectedKind) || v.getBigUint64(i * 24 + 8, true) !== 0n
         || pointer !== BigInt(expected) && !(i === 6 && pointer === BigInt(COMMAND))) throw new Error('Unrecognized P1 bootloader dispatch table; no firmware was written.');
     }
@@ -136,9 +156,10 @@ export class P1HidRecovery {
     await this.write(CALLBACK, callback);
     if (!equal(await this.read(CALLBACK, 8), callback)) throw new Error('P1 RAM callback verification failed.');
     this.commands = true;
-    this.log('Verified P1 1.0.44 bootloader; enabled temporary RAM recovery commands.');
+    this.log(`Verified P1 stock ${this.stockVersion} bootloader layout; enabled temporary RAM recovery commands.`);
   }
   async write(address, data) {
+    const CALLBACK = this.layout.callback;
     if (!this.verified || !(address === CALLBACK && data.length === 8 || address === SCRATCH && data.length === 4
       || Object.values(P1_RAM_FILES).some(([a, n]) => address === a && data.length > 0 && data.length <= n))) throw new Error('Unverified or out-of-range P1 RAM write.');
     await this.send(4, setup('uftr', data.length, address));
